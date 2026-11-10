@@ -19,7 +19,6 @@ class BubbleView(c: Context) : View(c) {
         p.color = Color.parseColor(when { t == 0 -> "#660084FF"; rate >= 0.6f -> "#CC2ECC71"; rate >= 0.4f -> "#CCF5A623"; else -> "#CCE74C3C" })
         cv.drawRect(0f, w - w * rate, w, w, p)   // 像电量一样从下往上充
         cv.restore()
-        p.style = Paint.Style.STROKE; p.strokeWidth = 4f; p.color = Color.parseColor("#0084FF"); cv.drawCircle(r, r, r - 2, p)
         p.style = Paint.Style.FILL; p.color = Color.WHITE; p.textAlign = Paint.Align.CENTER; p.isFakeBoldText = true
         p.textSize = w * 0.27f; cv.drawText(if (t == 0) "奇" else "${(rate * 100).toInt()}%", r, r + w * 0.03f, p)
         p.isFakeBoldText = false; p.textSize = w * 0.19f; cv.drawText("$ok/$t", r, r + w * 0.27f, p)
@@ -32,17 +31,27 @@ class FloatingService : Service() {
     private lateinit var bubble: BubbleView
     private lateinit var bp: WindowManager.LayoutParams
     private var panel: View? = null
+    private var panelP: WindowManager.LayoutParams? = null
     private var mask: FrameLayout? = null
     private var maskP: WindowManager.LayoutParams? = null
     private var noteWin: View? = null
+    private var reopenMask = false
 
     private fun d(x: Int) = (x * resources.displayMetrics.density).toInt()
     private val sw get() = resources.displayMetrics.widthPixels
     private val sh get() = resources.displayMetrics.heightPixels
+    private fun sp() = Store.sp(this)
     private fun params(w: Int, h: Int, focus: Boolean = false) = WindowManager.LayoutParams(
         w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         if (focus) 0 else WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
     ).apply { gravity = Gravity.TOP or Gravity.START; if (focus) softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE }
+    private fun savePos(k: String, p: WindowManager.LayoutParams) {
+        sp().edit().putInt(k + "_x", p.x).putInt(k + "_y", p.y).putInt(k + "_w", p.width).putInt(k + "_h", p.height).apply()
+    }
+    private fun loadP(k: String, w: Int, h: Int, x: Int, y: Int, focus: Boolean = false): WindowManager.LayoutParams {
+        val s = sp()
+        return params(s.getInt(k + "_w", w), s.getInt(k + "_h", h), focus).apply { this.x = s.getInt(k + "_x", x); this.y = s.getInt(k + "_y", y) }
+    }
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -50,8 +59,9 @@ class FloatingService : Service() {
         if (!running) {
             running = true; startFg()
             wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            bubble = BubbleView(this); bp = params(d(56), d(56)).apply { x = d(8); y = d(200) }
-            drag(bubble, bp) { togglePanel() }
+            bubble = BubbleView(this)
+            bp = loadP("bubble", d(56), d(56), d(8), d(200)).apply { width = d(56); height = d(56) }
+            drag(bubble, bubble, bp, { followPanel() }, { togglePanel() }, "bubble")
             wm.addView(bubble, bp)
         }
         applyPrefs(); refreshBubble()
@@ -66,40 +76,54 @@ class FloatingService : Service() {
         startForeground(1, n)
     }
 
-    private fun drag(v: View, p: WindowManager.LayoutParams, tap: (() -> Unit)?) {
+    /** handle 被拖动时移动 target；点击触发 onTap；拖完保存位置 */
+    private fun drag(handle: View, target: View, p: WindowManager.LayoutParams, onMove: (() -> Unit)?, onTap: (() -> Unit)?, key: String?) {
         var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false
-        v.setOnTouchListener { _, e ->
+        handle.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; ox = p.x; oy = p.y; moved = false }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - sx; val dy = e.rawY - sy
                     if (Math.abs(dx) > 10 || Math.abs(dy) > 10) moved = true
-                    if (moved) { p.x = ox + dx.toInt(); p.y = oy + dy.toInt(); wm.updateViewLayout(v, p) }
+                    if (moved) { p.x = ox + dx.toInt(); p.y = oy + dy.toInt(); wm.updateViewLayout(target, p); onMove?.invoke() }
                 }
-                MotionEvent.ACTION_UP -> if (!moved) tap?.invoke()
+                MotionEvent.ACTION_UP -> if (!moved) onTap?.invoke() else if (key != null) savePos(key, p)
+            }
+            true
+        }
+    }
+    private fun resize(h: View, target: View, p: WindowManager.LayoutParams, minW: Int, minH: Int, key: String) {
+        var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0
+        h.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; w0 = p.width; h0 = p.height }
+                MotionEvent.ACTION_MOVE -> {
+                    p.width = maxOf(minW, w0 + (e.rawX - sx).toInt()); p.height = maxOf(minH, h0 + (e.rawY - sy).toInt())
+                    wm.updateViewLayout(target, p)
+                }
+                MotionEvent.ACTION_UP -> savePos(key, p)
             }
             true
         }
     }
 
     private fun applyPrefs() {
-        val s = Store.sp(this)
-        bubble.alpha = s.getInt("bubble_alpha", 100) / 100f
-        mask?.setBackgroundColor(Color.argb(s.getInt("mask_alpha", 100) * 255 / 100, 0, 0, 0))
+        bubble.alpha = sp().getInt("bubble_alpha", 100) / 100f
+        mask?.setBackgroundColor(Color.argb(sp().getInt("mask_alpha", 100) * 255 / 100, 0, 0, 0))
     }
     private fun refreshBubble() {
-        val d = Store.today()
-        bubble.t = Store.total(this, d); bubble.ok = Store.correct(this, d); bubble.rate = Store.rate(this, d)
+        val dt = Store.today()
+        bubble.t = Store.total(this, dt); bubble.ok = Store.correct(this, dt); bubble.rate = Store.rate(this, dt)
         bubble.invalidate()
     }
 
-    // ---------- UI helpers ----------
+    // ---------- 黑底 UI ----------
     private fun box() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL; setPadding(d(10), d(10), d(10), d(10))
-        background = GradientDrawable().apply { setColor(Color.parseColor("#F2FFFFFF")); cornerRadius = d(16).toFloat(); setStroke(d(1), Color.parseColor("#660084FF")) }
+        background = GradientDrawable().apply { setColor(Color.parseColor("#F0141416")); cornerRadius = d(16).toFloat(); setStroke(d(1), Color.parseColor("#33FFFFFF")) }
     }
-    private fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(Color.parseColor("#1F2D3D")); setPadding(d(4), d(2), d(4), d(4)) }
-    private fun btn(t: String, bg: String = "#0084FF", click: () -> Unit) = TextView(this).apply {
+    private fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(Color.parseColor("#DDDDDD")); setPadding(d(4), d(4), d(4), d(6)) }
+    private fun btn(t: String, bg: String = "#2C2C31", click: () -> Unit) = TextView(this).apply {
         text = t; setTextColor(Color.WHITE); textSize = 14f; gravity = Gravity.CENTER; setPadding(d(4), d(10), d(4), d(10))
         background = GradientDrawable().apply { setColor(Color.parseColor(bg)); cornerRadius = d(10).toFloat() }
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(d(3), d(3), d(3), d(3)) }
@@ -107,75 +131,91 @@ class FloatingService : Service() {
     }
     private fun row(vararg v: View) = LinearLayout(this).apply { v.forEach { addView(it) } }
 
-    // ---------- 面板 ----------
-    private fun togglePanel() { if (panel != null) closePanel() else showMenu() }
+    // ---------- 选项面板：跟随悬浮球 ----------
+    private fun togglePanel() {
+        if (panel != null) { closePanel(); if (reopenMask) { reopenMask = false; openMask() } } else showMenu()
+    }
     private fun closePanel() { panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }; panel = null }
+    private fun place(p: WindowManager.LayoutParams, h: Int) {
+        p.x = minOf(maxOf(bp.x, 0), maxOf(0, sw - d(250)))
+        p.y = bp.y + d(56) + d(6)
+        if (p.y + h > sh) p.y = maxOf(0, bp.y - h - d(6))
+    }
+    private fun followPanel() {
+        val v = panel ?: return; val p = panelP ?: return
+        place(p, if (v.height > 0) v.height else d(240)); try { wm.updateViewLayout(v, p) } catch (_: Exception) {}
+    }
     private fun showPanel(b: View) {
         closePanel()
-        val p = params(d(250), ViewGroup.LayoutParams.WRAP_CONTENT)
-        p.x = minOf(maxOf(bp.x, 0), sw - d(250)); p.y = bp.y + d(62)
-        if (p.y > sh - d(330)) p.y = maxOf(0, bp.y - d(260))
-        wm.addView(b, p); panel = b
+        val p = params(d(250), ViewGroup.LayoutParams.WRAP_CONTENT); place(p, d(240))
+        wm.addView(b, p); panel = b; panelP = p
+        b.post { followPanel() }
     }
     private fun showMenu() {
         val b = box()
-        b.addView(label("奇的放大镜 · 选择区间"))
+        b.addView(label("选择区间"))
         b.addView(row(
             btn(if (mask != null) "关遮挡" else "黑遮挡") { closePanel(); if (mask != null) closeMask() else openMask() },
-            btn("记事本", "#5B8DEF") { showNotes() },
-            btn("退出", "#E74C3C") { stopSelf() }))
-        val opts = listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+")
-        opts.chunked(3).forEach { r -> b.addView(row(*r.map { o -> btn(o) { pick(o) } }.toTypedArray())) }
+            btn("记事本") { showNotes() },
+            btn("退出", "#7A2B2B") { stopSelf() }))
+        listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+").chunked(3).forEach { r -> b.addView(row(*r.map { o -> btn(o) { pick(o) } }.toTypedArray())) }
         showPanel(b)
     }
     private fun pick(c: String) {
-        closeMask()   // 选择后自动关闭黑色遮挡
+        reopenMask = mask != null
+        closeMask()
         val b = box()
         b.addView(label("区间 $c ：结果是？"))
-        b.addView(row(btn("✔ 对", "#2ECC71") { record(c, true) }, btn("✘ 错", "#E74C3C") { record(c, false) }))
+        b.addView(row(btn("✔ 对", "#1E9E5A") { record(c, true) }, btn("✘ 错", "#C0392B") { record(c, false) }))
         showPanel(b)
     }
     private fun record(c: String, ok: Boolean) {
-        Store.add(this, c, ok); refreshBubble(); closePanel()
+        Store.add(this, c, ok); refreshBubble()
+        if (reopenMask) { reopenMask = false; openMask() }   // 黑色遮挡重新打开
+        showMenu()                                            // 选项自动再弹出
         val ctx = applicationContext; Thread { GitHub.sync(ctx) }.start()
     }
 
-    // ---------- 黑色遮挡：可拖动、可缩放、可关闭 ----------
+    // ---------- 黑色遮挡（位置大小记忆） ----------
     private fun openMask() {
         if (mask != null) return
-        val a = Store.sp(this).getInt("mask_alpha", 100) * 255 / 100
+        val a = sp().getInt("mask_alpha", 100) * 255 / 100
         val f = FrameLayout(this).apply { setBackgroundColor(Color.argb(a, 0, 0, 0)) }
-        val p = maskP ?: params(d(260), d(110)).apply { x = (sw - d(260)) / 2; y = d(300) }
-        maskP = p
+        val p = loadP("mask", d(260), d(110), (sw - d(260)) / 2, d(300)); maskP = p
         val x = TextView(this).apply { text = "✕"; setTextColor(Color.WHITE); textSize = 18f; gravity = Gravity.CENTER; setOnClickListener { closeMask() } }
         f.addView(x, FrameLayout.LayoutParams(d(40), d(40), Gravity.TOP or Gravity.END))
         val h = TextView(this).apply { text = "◢"; setTextColor(Color.parseColor("#AAFFFFFF")); textSize = 20f; gravity = Gravity.CENTER }
         f.addView(h, FrameLayout.LayoutParams(d(44), d(44), Gravity.BOTTOM or Gravity.END))
-        var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0
-        h.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; w0 = p.width; h0 = p.height }
-                MotionEvent.ACTION_MOVE -> {
-                    p.width = maxOf(d(60), w0 + (e.rawX - sx).toInt()); p.height = maxOf(d(40), h0 + (e.rawY - sy).toInt())
-                    wm.updateViewLayout(f, p)
-                }
-            }
-            true
-        }
-        drag(f, p, null)
+        resize(h, f, p, d(60), d(40), "mask")
+        drag(f, f, p, null, null, "mask")
         wm.addView(f, p); mask = f
-        wm.removeView(bubble); wm.addView(bubble, bp)   // 悬浮球始终在最上层
+        wm.removeView(bubble); wm.addView(bubble, bp)
     }
     private fun closeMask() { mask?.let { try { wm.removeView(it) } catch (_: Exception) {} }; mask = null }
 
-    // ---------- 记事本 ----------
+    // ---------- 记事本：黑底、可拖动、可缩放、可调透明度 ----------
     private fun showNotes() {
         closePanel(); if (noteWin != null) return
         val b = box()
-        val et = EditText(this).apply { hint = "为什么出错？原因分析…"; minLines = 3; gravity = Gravity.TOP; textSize = 14f }
-        b.addView(label("错题记事本（自动同步GitHub）")); b.addView(et)
+        val title = label("📝 错题记事本（按住此处拖动）")
+        val et = EditText(this).apply {
+            hint = "为什么出错？原因分析…"; setHintTextColor(Color.parseColor("#888888")); setTextColor(Color.WHITE)
+            gravity = Gravity.TOP; textSize = 14f
+            background = GradientDrawable().apply { setColor(Color.parseColor("#2A2A2E")); cornerRadius = d(10).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        }
+        val seek = SeekBar(this).apply {
+            max = 70; progress = sp().getInt("note_alpha", 100) - 30
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) { b.alpha = (p + 30) / 100f; sp().edit().putInt("note_alpha", p + 30).apply() }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+        }
+        val handle = TextView(this).apply { text = "◢"; setTextColor(Color.parseColor("#AAFFFFFF")); textSize = 20f; gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(d(44), d(44)) }
+        b.addView(title); b.addView(et); b.addView(label("透明度")); b.addView(seek)
         b.addView(row(
-            btn("保存") {
+            btn("保存", "#1E9E5A") {
                 val t = et.text.toString().trim()
                 if (t.isNotEmpty()) {
                     Store.addNote(this@FloatingService, t)
@@ -184,8 +224,11 @@ class FloatingService : Service() {
                 }
                 closeNotes()
             },
-            btn("取消", "#888888") { closeNotes() }))
-        val p = params(d(290), ViewGroup.LayoutParams.WRAP_CONTENT, true).apply { x = (sw - d(290)) / 2; y = d(90) }
+            btn("取消") { closeNotes() }, handle))
+        val p = loadP("note", d(290), d(280), (sw - d(290)) / 2, d(90), true)
+        b.alpha = sp().getInt("note_alpha", 100) / 100f
+        drag(title, b, p, null, null, "note")
+        resize(handle, b, p, d(200), d(190), "note")
         wm.addView(b, p); noteWin = b
     }
     private fun closeNotes() { noteWin?.let { try { wm.removeView(it) } catch (_: Exception) {} }; noteWin = null }
