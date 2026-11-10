@@ -168,7 +168,7 @@ class FloatingService : Service() {
     private fun chip(t: String, sel: MutableSet<String>, on: String): TextView {
         val v = btn(t) {}; v.textSize = 13f
         if (t in sel) setBg(v, on)
-        v.setOnClickListener { if (sel.remove(t)) setBg(v, "#2C2C31") else { sel.add(t); setBg(v, on) } }
+        v.setOnClickListener { if (sel.remove(t)) setBg(v, "#2C2C31") else { sel.add(t); setBg(v, on) }; saveTags() }
         return v
     }
 

@@ -29,17 +29,19 @@ class MainActivity : Activity() {
     }
     override fun onResume() { super.onResume(); build(); autoSync() }
 
-    /** 每次打开App自动同步 */
+    /** 每次打开App：先从云端恢复本地缺的数据，再上传 */
     private fun autoSync() {
         val sp = Store.sp(this)
         if ((sp.getString("token", "") ?: "").isBlank()) return
         syncTv?.text = "☁ 同步中…"
         val x = applicationContext
         Thread {
-            val m = GitHub.sync(x, true)
+            val (n, err) = GitHub.restore(x)
+            val m = err ?: GitHub.sync(x, true)   // 恢复失败就不上传，避免覆盖云端
             val t = SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date())
-            sp.edit().putString("last_sync", "$t  $m").apply()
-            runOnUiThread { syncTv?.text = "☁ $t  $m" }
+            val full = "$t  " + (if (n > 0 && err == null) "已从云端恢复 $n 天数据；" else "") + m
+            sp.edit().putString("last_sync", full).apply()
+            runOnUiThread { if (n > 0) build(); syncTv?.text = "☁ $full" }
         }.start()
     }
     private fun bgSync() { val x = applicationContext; Thread { GitHub.sync(x) }.start() }
@@ -95,7 +97,7 @@ class MainActivity : Activity() {
         setContentView(frame)
         val sp = Store.sp(this)
 
-        col.addView(tv("奇的放大镜", 28f, BLUE, true).apply { setPadding(d(4), 0, 0, d(2)) })
+        col.addView(tv("奇的放大镜 v1.5", 28f, BLUE, true).apply { setPadding(d(4), 0, 0, d(2)) })
         syncTv = tv(if ((sp.getString("token", "") ?: "").isBlank()) "☁ 未配置GitHub同步（见最下方）" else "☁ " + (sp.getString("last_sync", "") ?: ""), 12f, "#5A6B7F")
             .apply { setPadding(d(4), 0, 0, d(12)) }
         col.addView(syncTv)
@@ -115,6 +117,8 @@ class MainActivity : Activity() {
             ck.addView(tv(title, 14f, color, true).apply { setPadding(0, d(8), 0, d(2)) })
             ck.addView(tv(if (l.isEmpty()) "暂无" else l.take(8).joinToString("   ") { "${it.w}×${it.n}(${it.pct}%)" }, 14f))
         }
+        val (allN, tagN) = Store.taggedCount(this)
+        ck.addView(tv("已记录 $allN 道题，其中 $tagN 道选了关键词（只有选了类型/关键词的题才会统计）", 12f, "#5A6B7F").apply { setPadding(0, d(4), 0, 0) })
         kwLine("内容类型", "#1F2D3D", ks["type"]!!); kwLine("✔ 正向关键词", BLUE, ks["pos"]!!); kwLine("✘ 反向关键词", ORANGE, ks["neg"]!!)
         col.addView(ck)
 
@@ -195,10 +199,9 @@ class MainActivity : Activity() {
         val fo = field("GitHub 用户名", "owner"); val fr = field("仓库名（需已存在）", "repo"); val ft = field("Token", "token", true)
         c5.addView(fo); c5.addView(fr); c5.addView(ft)
         val status = tv("", 13f, "#5A6B7F")
-        c5.addView(button("保存并立即同步") {
+        c5.addView(button("保存并立即同步（会先从云端恢复数据）") {
             sp.edit().putString("owner", fo.text.toString().trim()).putString("repo", fr.text.toString().trim()).putString("token", ft.text.toString().trim()).apply()
-            status.text = "同步中…"; val x = applicationContext
-            Thread { val m = GitHub.sync(x, true); runOnUiThread { status.text = m } }.start()
+            status.text = "同步中…结果见页面顶部"; autoSync()
         })
         c5.addView(status)
         col.addView(c5)

@@ -86,4 +86,15 @@ object Store {
         }
         return m.mapValues { e -> e.value.entries.sortedByDescending { it.value[0] }.map { KW(it.key, it.value[0], it.value[1]) } }
     }
+    /** (总题数, 已带关键词的题数) */
+    fun taggedCount(c: Context): Pair<Int, Int> {
+        var all = 0; var tagged = 0
+        for (k in sp(c).all.keys.filter { it.startsWith("log_") }) for (line in log(c, k.substring(4)).split("\n")) {
+            val p = line.split(","); if (p.size < 3) continue
+            all++; if (p.size >= 4 && p.drop(3).any { it.isNotBlank() }) tagged++
+        }
+        return all to tagged
+    }
+    fun setLog(c: Context, d: String, text: String) = sp(c).edit().putString("log_$d", text).apply()
+    fun setCounts(c: Context, d: String, t: Int, ok: Int) = sp(c).edit().putInt("t_$d", t).putInt("c_$d", ok).apply()
 }

@@ -1,6 +1,7 @@
 package com.qidi.magnifier
 import android.content.Context
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -84,5 +85,58 @@ object GitHub {
             }
             "同步成功 ✓"
         } catch (e: Exception) { "同步失败：" + e.message }
+    }
+
+    private fun list(t: String, o: String, r: String, path: String): List<String> {
+        val (c, s) = call("GET", "https://api.github.com/repos/$o/$r/contents/$path", t, null)
+        if (c == 404) return emptyList()
+        if (c != 200) throw Exception("读取目录$path 失败($c)")
+        val a = JSONArray(s)
+        return (0 until a.length()).map { a.getJSONObject(it).getString("name") }
+    }
+
+    /** 从云端把本地缺少的数据拉回来（重装App后恢复）。返回 (恢复的天数, 错误信息或null)。只补空缺，不覆盖本地已有数据 */
+    @Synchronized fun restore(c: Context): Pair<Int, String?> {
+        val sp = Store.sp(c)
+        val tok = sp.getString("token", "") ?: ""; val o = sp.getString("owner", "") ?: ""; val r = sp.getString("repo", "") ?: ""
+        if (tok.isBlank() || o.isBlank() || r.isBlank()) return 0 to null
+        return try {
+            var n = 0
+            val (st, _) = get(tok, o, r, "data/stats.json")
+            if (st != null) {
+                val j = JSONObject(st)
+                for (d in j.keys()) {
+                    val e = j.getJSONObject(d)
+                    if (Store.total(c, d) == 0 && e.optInt("total") > 0) { Store.setCounts(c, d, e.optInt("total"), e.optInt("correct")); n++ }
+                    if (Store.score(c, d) == 0 && e.optInt("score") > 0) Store.setScore(c, d, e.optInt("score"))
+                }
+            }
+            for (name in list(tok, o, r, "logs")) {
+                if (!name.endsWith(".csv")) continue
+                val d = name.removeSuffix(".csv")
+                if (Store.log(c, d).isNotEmpty()) continue
+                val (txt, _) = get(tok, o, r, "logs/$name"); if (txt == null) continue
+                val body = txt.lines().drop(1).filter { it.isNotBlank() }; if (body.isEmpty()) continue
+                Store.setLog(c, d, body.joinToString("\n") + "\n")
+                Store.setCounts(c, d, body.size, body.count { it.split(",").getOrNull(2) == "1" })
+            }
+            for (name in list(tok, o, r, "notes")) {
+                if (!name.endsWith(".md")) continue
+                val d = name.removeSuffix(".md")
+                if (Store.notes(c, d).isNotBlank()) continue
+                val (txt, _) = get(tok, o, r, "notes/$name"); if (txt == null) continue
+                val body = txt.substringAfter("错题笔记\n\n", "").trim()
+                if (body.isNotEmpty()) Store.setNotes(c, d, body)
+            }
+            val (op, _) = get(tok, o, r, "config/options.json")
+            if (op != null) {
+                val j = JSONObject(op)
+                for (k in Store.DEFAULTS.keys) if (sp.getString("opt_$k", null) == null && j.has(k)) {
+                    val a = j.getJSONArray(k)
+                    sp.edit().putString("opt_$k", (0 until a.length()).joinToString("\n") { a.getString(it) }).apply()
+                }
+            }
+            n to null
+        } catch (e: Exception) { 0 to "恢复失败：" + e.message }
     }
 }
