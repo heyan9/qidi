@@ -16,7 +16,7 @@ class BubbleView(c: Context) : View(c) {
         p.style = Paint.Style.FILL; p.color = Color.parseColor("#CC1B1B1F"); cv.drawCircle(r, r, r, p)
         val path = Path().apply { addCircle(r, r, r - 3, Path.Direction.CW) }
         cv.save(); cv.clipPath(path)
-        p.color = Color.parseColor(when { t == 0 -> "#660084FF"; rate >= 0.6f -> "#CC0084FF"; rate >= 0.4f -> "#CC6CB4FF"; else -> "#CCD4894A" })
+        p.color = Color.parseColor(when { t == 0 -> "#660084FF"; rate >= 0.6f -> "#CC0084FF"; rate >= 0.4f -> "#CC6CB4FF"; else -> "#CCFF8A2B" })
         cv.drawRect(0f, w - w * rate, w, w, p)   // 像电量一样从下往上充
         cv.restore()
         p.style = Paint.Style.FILL; p.color = Color.WHITE; p.textAlign = Paint.Align.CENTER; p.isFakeBoldText = true
@@ -165,9 +165,10 @@ class FloatingService : Service() {
         return g
     }
     private fun setBg(v: View, c: String) { (v.background as GradientDrawable).setColor(Color.parseColor(c)) }
-    private fun chip(t: String, sel: MutableSet<String>): TextView {
+    private fun chip(t: String, sel: MutableSet<String>, on: String): TextView {
         val v = btn(t) {}; v.textSize = 13f
-        v.setOnClickListener { if (sel.remove(t)) setBg(v, "#2C2C31") else { sel.add(t); setBg(v, "#0084FF") } }
+        if (t in sel) setBg(v, on)
+        v.setOnClickListener { if (sel.remove(t)) setBg(v, "#2C2C31") else { sel.add(t); setBg(v, on) } }
         return v
     }
 
@@ -177,7 +178,7 @@ class FloatingService : Service() {
         b.addView(row(
             btn(if (mask != null) "关遮挡" else "黑遮挡") { closePanel(); if (mask != null) closeMask() else openMask() },
             btn("记事本") { showNotes() },
-            btn("退出", "#8F5F36") { stopSelf() }))
+            btn("退出", "#E0701A") { stopSelf() }))
         b.addView(grid(listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+"), 3) { o -> btn(o) { pick(o) } })
         showPanel(b)
     }
@@ -186,45 +187,75 @@ class FloatingService : Service() {
         closeMask()
         val b = box()
         b.addView(label("区间 $c ：结果是？"))
-        b.addView(row(btn("✔ 对", "#0084FF") { judge(c, true) }, btn("✘ 错", "#D4894A") { judge(c, false) }))
+        b.addView(row(btn("✔ 对", "#0084FF") { judge(c, true) }, btn("✘ 错", "#FF8A2B") { judge(c, false) }))
         showPanel(b)
     }
+
+    // ---------- 对/错之后：①类型 → ②正向关键词 → ③反向关键词 ----------
+    private var curType = ""
+    private val selPos = linkedSetOf<String>()
+    private val selNeg = linkedSetOf<String>()
+    private var addWin: View? = null
+    private fun saveTags() { Store.setLastTags(this, curType, selPos.toList(), selNeg.toList()) }
+
     private fun judge(c: String, ok: Boolean) {
         Store.add(this, c, ok); refreshBubble()
         if (reopenMask) { reopenMask = false; openMask() }   // 黑色遮挡重新打开
-        pendingSync = true
-        showTypes(ok)
+        pendingSync = true; curType = ""; selPos.clear(); selNeg.clear()
+        showTypes()
     }
     private fun finishFlow() {
+        if (curType.isNotEmpty() || selPos.isNotEmpty() || selNeg.isNotEmpty()) saveTags()
         pendingSync = false; refreshBubble()
         val c = applicationContext; Thread { GitHub.sync(c) }.start()
         showMenu()
     }
-    private fun showTypes(ok: Boolean) {
-        val items = Store.options(this, if (ok) "ok_type" else "bad_type")
-        if (items.isEmpty()) { finishFlow(); return }
+    private fun showTypes() {
         val b = box()
-        b.addView(label(if (ok) "✔ 选择内容类型" else "✘ 选择内容类型"))
-        b.addView(grid(items, 3) { t -> btn(t) { showTags(ok, t) } })
-        b.addView(row(btn("跳过") { finishFlow() }))
+        b.addView(label("① 内容类型"))
+        b.addView(grid(Store.options(this, "type"), 3) { t -> btn(t) { curType = t; saveTags(); showMulti("pos") } })
+        b.addView(row(btn("＋ 添加") { showAdd("type") }, btn("跳过") { showMulti("pos") }))
         showPanel(b)
     }
-    private fun showTags(ok: Boolean, type: String) {
-        Store.setLastTags(this, type, emptyList())
-        val items = Store.options(this, if (ok) "ok_tag" else "bad_tag")
-        if (items.isEmpty()) { finishFlow(); return }
-        val sel = linkedSetOf<String>()
+    private fun showMulti(kind: String) {
+        val pos = kind == "pos"
+        val sel = if (pos) selPos else selNeg
+        val on = if (pos) "#0084FF" else "#FF8A2B"
         val b = box()
-        b.addView(label("$type · 选择特征（可多选）"))
+        b.addView(label(if (pos) "② 正向关键词（可多选）" else "③ 反向关键词（可多选）"))
         val sv = ScrollView(this)
-        sv.addView(grid(items, 2) { t -> chip(t, sel) })
-        sv.layoutParams = LinearLayout.LayoutParams(-1, minOf(d(300), sh / 2 - d(60)))
+        sv.addView(grid(Store.options(this, kind), 2) { t -> chip(t, sel, on) })
+        sv.layoutParams = LinearLayout.LayoutParams(-1, minOf(d(300), sh / 2 - d(70)))
         b.addView(sv)
         b.addView(row(
-            btn("完成", "#0084FF") { Store.setLastTags(this@FloatingService, type, sel.toList()); finishFlow() },
-            btn("跳过") { finishFlow() }))
+            btn("＋ 添加") { showAdd(kind) },
+            btn(if (pos) "下一步" else "完成", on) { saveTags(); if (pos) showMulti("neg") else finishFlow() }))
         showPanel(b)
     }
+    private fun showAdd(kind: String) {
+        closeAdd()
+        val b = box()
+        val et = EditText(this).apply {
+            hint = "输入新的关键词"; setHintTextColor(Color.parseColor("#888888")); setTextColor(Color.WHITE); textSize = 15f; setSingleLine()
+            background = GradientDrawable().apply { setColor(Color.parseColor("#2A2A2E")); cornerRadius = d(10).toFloat() }
+            setPadding(d(10), d(8), d(10), d(8))
+        }
+        b.addView(label("添加新关键词（会永久保存并自动选中）")); b.addView(et)
+        b.addView(row(
+            btn("添加", "#0084FF") {
+                val t = et.text.toString().trim().replace(",", "，").replace("|", "/")
+                if (t.isNotEmpty()) {
+                    Store.addOption(this@FloatingService, kind, t)
+                    when (kind) { "type" -> { curType = t; saveTags() }; "pos" -> selPos.add(t); else -> selNeg.add(t) }
+                }
+                closeAdd()
+                if (kind == "type") showMulti("pos") else showMulti(kind)
+            },
+            btn("取消") { closeAdd() }))
+        val p = params(d(270), ViewGroup.LayoutParams.WRAP_CONTENT, true).apply { x = (sw - d(270)) / 2; y = d(80) }
+        wm.addView(b, p); addWin = b
+    }
+    private fun closeAdd() { addWin?.let { try { wm.removeView(it) } catch (_: Exception) {} }; addWin = null }
 
     // ---------- 黑色遮挡（位置大小记忆） ----------
     private fun openMask() {
@@ -284,7 +315,7 @@ class FloatingService : Service() {
     private fun closeNotes() { noteWin?.let { try { wm.removeView(it) } catch (_: Exception) {} }; noteWin = null }
 
     override fun onDestroy() {
-        running = false; closePanel(); closeMask(); closeNotes()
+        running = false; closePanel(); closeMask(); closeNotes(); closeAdd()
         try { wm.removeView(bubble) } catch (_: Exception) {}
         super.onDestroy()
     }

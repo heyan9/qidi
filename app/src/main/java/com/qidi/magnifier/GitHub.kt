@@ -65,11 +65,12 @@ object GitHub {
             }
             putAuto(tok, o, r, "LEADERBOARD.md", md.toString())
 
-            val (ok, bad) = Store.keywordStats(c)
-            val kw = StringBuilder("# 关键词统计\n\n## ✔ 高频正确关键词\n\n| 关键词 | 次数 |\n|---|---|\n")
-            ok.forEach { kw.append("| ${it.first} | ${it.second} |\n") }
-            kw.append("\n## ✘ 高频错误关键词\n\n| 关键词 | 次数 |\n|---|---|\n")
-            bad.forEach { kw.append("| ${it.first} | ${it.second} |\n") }
+            val ks = Store.keywordStats(c)
+            val kw = StringBuilder("# 关键词统计\n\n（正确率 = 该关键词出现时判断为“对”的比例）\n")
+            for ((k, title) in listOf("type" to "① 内容类型", "pos" to "② 正向关键词", "neg" to "③ 反向关键词")) {
+                kw.append("\n## $title\n\n| 关键词 | 次数 | 正确率 |\n|---|---|---|\n")
+                ks[k]!!.forEach { kw.append("| ${it.w} | ${it.n} | ${it.pct}% |\n") }
+            }
             putAuto(tok, o, r, "KEYWORDS.md", kw.toString())
 
             val opt = JSONObject(); Store.DEFAULTS.keys.forEach { opt.put(it, org.json.JSONArray(Store.options(c, it))) }
@@ -78,7 +79,7 @@ object GitHub {
             val days = if (all) (Store.dates(c) + Store.noteDates(c)).distinct() else listOf(Store.today())
             for (d in days) {
                 val lg = Store.log(c, d); val nt = Store.notes(c, d)
-                if (lg.isNotEmpty()) putAuto(tok, o, r, "logs/$d.csv", "time,choice,correct,type,tags\n$lg")
+                if (lg.isNotEmpty()) putAuto(tok, o, r, "logs/$d.csv", "time,choice,correct,type,positive,negative\n$lg")
                 if (nt.isNotBlank()) putAuto(tok, o, r, "notes/$d.md", "# $d 错题笔记\n\n$nt\n")
             }
             "同步成功 ✓"

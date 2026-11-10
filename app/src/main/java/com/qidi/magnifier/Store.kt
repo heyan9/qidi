@@ -5,12 +5,11 @@ import java.util.*
 
 object Store {
     val DEFAULTS = mapOf(
-        "ok_type" to "搞笑\n摄影\n舞蹈\n手势舞\n绘画",
-        "ok_tag" to "可爱动作\n高亮\n简单易学\n颜色不跳\n母\n单人\n性吸引力\n爪\n不同寻常的动作\n全屏9比16\n强张力\n学校\n高饱和高亮\n全装\n萌坏\n萌蠢\n胖太\n私房\n私房互动视频\n动画",
-        "bad_type" to "搞笑\n摄影\n舞蹈\n手势舞\n绘画",
-        "bad_tag" to "多人\n半装\n没有露爪\n完成度低\n画面主角不够简单、完整\n自以为很帅\n颜色杂乱\n动作太常见"
+        "type" to "搞笑\n摄影\n舞蹈\n手势舞\n绘画",
+        "pos" to "可爱动作\n高亮\n简单易学\n颜色不跳\n母\n单人\n性吸引力\n爪\n不同寻常的动作\n全屏9比16\n强张力\n学校\n高饱和高亮\n全装\n萌坏\n萌蠢\n胖太\n私房\n私房互动视频\n动画",
+        "neg" to "多人\n半装\n没有露爪\n完成度低\n画面主角不够简单、完整\n自以为很帅\n颜色杂乱\n动作太常见"
     )
-    val OPTION_TITLES = listOf("ok_type" to "✔ 正确 · 第一步：内容类型", "ok_tag" to "✔ 正确 · 第二步：特征", "bad_type" to "✘ 错误 · 第一步：内容类型", "bad_tag" to "✘ 错误 · 第二步：特征")
+    val OPTION_TITLES = listOf("type" to "① 内容类型", "pos" to "② 正向关键词", "neg" to "③ 反向关键词")
 
     fun sp(c: Context) = c.getSharedPreferences("qi", Context.MODE_PRIVATE)
     private fun fmt() = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -36,12 +35,17 @@ object Store {
         s.edit().putInt("t_$d", total(c, d) + 1).putInt("c_$d", correct(c, d) + (if (ok) 1 else 0))
             .putString("log_$d", log(c, d) + line).putString("last", choice).apply()
     }
-    /** 给今天最后一条记录补上 内容类型 / 特征 */
-    @Synchronized fun setLastTags(c: Context, type: String, tags: List<String>) {
+    fun addOption(c: Context, key: String, text: String) {
+        val l = options(c, key).toMutableList(); if (text !in l) l.add(text)
+        sp(c).edit().putString("opt_$key", l.joinToString("\n")).apply()
+    }
+    /** 给今天最后一条记录补上 类型 / 正向 / 反向 关键词 */
+    @Synchronized fun setLastTags(c: Context, type: String, pos: List<String>, neg: List<String>) {
         val d = today(); val lines = log(c, d).trimEnd('\n').split("\n").toMutableList()
         if (lines.isEmpty() || lines.last().isEmpty()) return
         val p = lines.last().split(",")
-        lines[lines.size - 1] = p.take(3).joinToString(",") + "," + type.replace(",", "，") + "," + tags.joinToString("|") { it.replace(",", "，").replace("|", "/") }
+        val j = { l: List<String> -> l.joinToString("|") { it.replace(",", "，").replace("|", "/") } }
+        lines[lines.size - 1] = p.take(3).joinToString(",") + "," + type.replace(",", "，") + "," + j(pos) + "," + j(neg)
         sp(c).edit().putString("log_$d", lines.joinToString("\n") + "\n").apply()
     }
     @Synchronized fun addNote(c: Context, text: String) {
@@ -65,18 +69,21 @@ object Store {
         val l = lastDays(15).filter { score(c, it) > 0 }
         return if (l.isEmpty()) null else l.map { score(c, it) }.average().toFloat()
     }
-    /** 正确/错误 关键词出现次数（内容类型 + 特征），从高到低 */
-    fun keywordStats(c: Context): Pair<List<Pair<String, Int>>, List<Pair<String, Int>>> {
-        val ok = HashMap<String, Int>(); val bad = HashMap<String, Int>()
+    data class KW(val w: String, val n: Int, val ok: Int) { val pct get() = if (n == 0) 0 else ok * 100 / n }
+    /** 返回 "type"/"pos"/"neg" 三类关键词：出现次数、其中答对次数，按次数从高到低 */
+    fun keywordStats(c: Context): Map<String, List<KW>> {
+        val m = mapOf("type" to HashMap<String, IntArray>(), "pos" to HashMap<String, IntArray>(), "neg" to HashMap<String, IntArray>())
+        fun hit(k: String, w: String, ok: Boolean) { if (w.isBlank()) return; val a = m[k]!!.getOrPut(w) { IntArray(2) }; a[0]++; if (ok) a[1]++ }
         for (k in sp(c).all.keys.filter { it.startsWith("log_") }) {
             for (line in log(c, k.substring(4)).split("\n")) {
-                val p = line.split(","); if (p.size < 5) continue
-                val m = if (p[2] == "1") ok else bad
-                val words = listOf(p[3]) + p[4].split("|")
-                for (w in words) if (w.isNotBlank()) m[w] = (m[w] ?: 0) + 1
+                val p = line.split(","); if (p.size < 4) continue
+                val ok = p[2] == "1"
+                hit("type", p[3], ok)
+                var pos = ""; var neg = ""
+                if (p.size >= 6) { pos = p[4]; neg = p[5] } else if (p.size == 5) { if (ok) pos = p[4] else neg = p[4] }
+                pos.split("|").forEach { hit("pos", it, ok) }; neg.split("|").forEach { hit("neg", it, ok) }
             }
         }
-        val f = { m: HashMap<String, Int> -> m.entries.sortedByDescending { it.value }.map { it.key to it.value } }
-        return f(ok) to f(bad)
+        return m.mapValues { e -> e.value.entries.sortedByDescending { it.value[0] }.map { KW(it.key, it.value[0], it.value[1]) } }
     }
 }

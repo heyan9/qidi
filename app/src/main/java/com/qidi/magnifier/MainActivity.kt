@@ -17,7 +17,7 @@ import java.util.*
 
 class MainActivity : Activity() {
     private val BLUE = "#0084FF"
-    private val ORANGE = "#D4894A"
+    private val ORANGE = "#FF8A2B"
     private var syncTv: TextView? = null
     private fun d(x: Int) = (x * resources.displayMetrics.density).toInt()
 
@@ -109,13 +109,13 @@ class MainActivity : Activity() {
         col.addView(c1)
 
         // 关键词统计（紧跟胜率）
-        val (okK, badK) = Store.keywordStats(this)
-        val ck = card("高频关键词（来自你选的内容类型与特征）")
-        fun kwLine(title: String, color: String, l: List<Pair<String, Int>>) {
+        val ks = Store.keywordStats(this)
+        val ck = card("高频关键词（×次数，括号内是该词出现时的正确率）")
+        fun kwLine(title: String, color: String, l: List<Store.KW>) {
             ck.addView(tv(title, 14f, color, true).apply { setPadding(0, d(8), 0, d(2)) })
-            ck.addView(tv(if (l.isEmpty()) "暂无" else l.take(8).joinToString("   ") { "${it.first}×${it.second}" }, 14f))
+            ck.addView(tv(if (l.isEmpty()) "暂无" else l.take(8).joinToString("   ") { "${it.w}×${it.n}(${it.pct}%)" }, 14f))
         }
-        kwLine("✔ 正确", BLUE, okK); kwLine("✘ 错误", ORANGE, badK)
+        kwLine("内容类型", "#1F2D3D", ks["type"]!!); kwLine("✔ 正向关键词", BLUE, ks["pos"]!!); kwLine("✘ 反向关键词", ORANGE, ks["neg"]!!)
         col.addView(ck)
 
         // 评分
@@ -172,7 +172,7 @@ class MainActivity : Activity() {
         val c7 = card("选项管理（一行一个，可增删改）")
         val ets = LinkedHashMap<String, EditText>()
         Store.OPTION_TITLES.forEach { (k, title) ->
-            c7.addView(tv(title, 14f, if (k.startsWith("ok")) BLUE else ORANGE, true).apply { setPadding(0, d(10), 0, 0) })
+            c7.addView(tv(title, 14f, when (k) { "pos" -> BLUE; "neg" -> ORANGE; else -> "#1F2D3D" }, true).apply { setPadding(0, d(10), 0, 0) })
             val et = EditText(this).apply {
                 setText(Store.options(this@MainActivity, k).joinToString("\n")); textSize = 14f
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; minLines = 3
