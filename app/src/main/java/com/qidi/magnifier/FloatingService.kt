@@ -1,0 +1,198 @@
+package com.qidi.magnifier
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.graphics.*
+import android.graphics.drawable.GradientDrawable
+import android.os.IBinder
+import android.view.*
+import android.widget.*
+
+class BubbleView(c: Context) : View(c) {
+    var rate = 0f; var t = 0; var ok = 0
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    override fun onDraw(cv: Canvas) {
+        val w = width.toFloat(); val r = w / 2
+        p.style = Paint.Style.FILL; p.color = Color.parseColor("#CC1B1B1F"); cv.drawCircle(r, r, r, p)
+        val path = Path().apply { addCircle(r, r, r - 3, Path.Direction.CW) }
+        cv.save(); cv.clipPath(path)
+        p.color = Color.parseColor(when { t == 0 -> "#660084FF"; rate >= 0.6f -> "#CC2ECC71"; rate >= 0.4f -> "#CCF5A623"; else -> "#CCE74C3C" })
+        cv.drawRect(0f, w - w * rate, w, w, p)   // 像电量一样从下往上充
+        cv.restore()
+        p.style = Paint.Style.STROKE; p.strokeWidth = 4f; p.color = Color.parseColor("#0084FF"); cv.drawCircle(r, r, r - 2, p)
+        p.style = Paint.Style.FILL; p.color = Color.WHITE; p.textAlign = Paint.Align.CENTER; p.isFakeBoldText = true
+        p.textSize = w * 0.27f; cv.drawText(if (t == 0) "奇" else "${(rate * 100).toInt()}%", r, r + w * 0.03f, p)
+        p.isFakeBoldText = false; p.textSize = w * 0.19f; cv.drawText("$ok/$t", r, r + w * 0.27f, p)
+    }
+}
+
+class FloatingService : Service() {
+    companion object { var running = false }
+    private lateinit var wm: WindowManager
+    private lateinit var bubble: BubbleView
+    private lateinit var bp: WindowManager.LayoutParams
+    private var panel: View? = null
+    private var mask: FrameLayout? = null
+    private var maskP: WindowManager.LayoutParams? = null
+    private var noteWin: View? = null
+
+    private fun d(x: Int) = (x * resources.displayMetrics.density).toInt()
+    private val sw get() = resources.displayMetrics.widthPixels
+    private val sh get() = resources.displayMetrics.heightPixels
+    private fun params(w: Int, h: Int, focus: Boolean = false) = WindowManager.LayoutParams(
+        w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        if (focus) 0 else WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+    ).apply { gravity = Gravity.TOP or Gravity.START; if (focus) softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE }
+
+    override fun onBind(i: Intent?): IBinder? = null
+
+    override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
+        if (!running) {
+            running = true; startFg()
+            wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            bubble = BubbleView(this); bp = params(d(56), d(56)).apply { x = d(8); y = d(200) }
+            drag(bubble, bp) { togglePanel() }
+            wm.addView(bubble, bp)
+        }
+        applyPrefs(); refreshBubble()
+        return START_STICKY
+    }
+
+    private fun startFg() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("qi", "悬浮窗", NotificationManager.IMPORTANCE_LOW))
+        val n = Notification.Builder(this, "qi").setContentTitle("奇的放大镜运行中")
+            .setSmallIcon(android.R.drawable.ic_menu_search).build()
+        startForeground(1, n)
+    }
+
+    private fun drag(v: View, p: WindowManager.LayoutParams, tap: (() -> Unit)?) {
+        var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false
+        v.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; ox = p.x; oy = p.y; moved = false }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - sx; val dy = e.rawY - sy
+                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) moved = true
+                    if (moved) { p.x = ox + dx.toInt(); p.y = oy + dy.toInt(); wm.updateViewLayout(v, p) }
+                }
+                MotionEvent.ACTION_UP -> if (!moved) tap?.invoke()
+            }
+            true
+        }
+    }
+
+    private fun applyPrefs() {
+        val s = Store.sp(this)
+        bubble.alpha = s.getInt("bubble_alpha", 100) / 100f
+        mask?.setBackgroundColor(Color.argb(s.getInt("mask_alpha", 100) * 255 / 100, 0, 0, 0))
+    }
+    private fun refreshBubble() {
+        val d = Store.today()
+        bubble.t = Store.total(this, d); bubble.ok = Store.correct(this, d); bubble.rate = Store.rate(this, d)
+        bubble.invalidate()
+    }
+
+    // ---------- UI helpers ----------
+    private fun box() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(d(10), d(10), d(10), d(10))
+        background = GradientDrawable().apply { setColor(Color.parseColor("#F2FFFFFF")); cornerRadius = d(16).toFloat(); setStroke(d(1), Color.parseColor("#660084FF")) }
+    }
+    private fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(Color.parseColor("#1F2D3D")); setPadding(d(4), d(2), d(4), d(4)) }
+    private fun btn(t: String, bg: String = "#0084FF", click: () -> Unit) = TextView(this).apply {
+        text = t; setTextColor(Color.WHITE); textSize = 14f; gravity = Gravity.CENTER; setPadding(d(4), d(10), d(4), d(10))
+        background = GradientDrawable().apply { setColor(Color.parseColor(bg)); cornerRadius = d(10).toFloat() }
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(d(3), d(3), d(3), d(3)) }
+        setOnClickListener { click() }
+    }
+    private fun row(vararg v: View) = LinearLayout(this).apply { v.forEach { addView(it) } }
+
+    // ---------- 面板 ----------
+    private fun togglePanel() { if (panel != null) closePanel() else showMenu() }
+    private fun closePanel() { panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }; panel = null }
+    private fun showPanel(b: View) {
+        closePanel()
+        val p = params(d(250), ViewGroup.LayoutParams.WRAP_CONTENT)
+        p.x = minOf(maxOf(bp.x, 0), sw - d(250)); p.y = bp.y + d(62)
+        if (p.y > sh - d(330)) p.y = maxOf(0, bp.y - d(260))
+        wm.addView(b, p); panel = b
+    }
+    private fun showMenu() {
+        val b = box()
+        b.addView(label("奇的放大镜 · 选择区间"))
+        b.addView(row(
+            btn(if (mask != null) "关遮挡" else "黑遮挡") { closePanel(); if (mask != null) closeMask() else openMask() },
+            btn("记事本", "#5B8DEF") { showNotes() },
+            btn("退出", "#E74C3C") { stopSelf() }))
+        val opts = listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+")
+        opts.chunked(3).forEach { r -> b.addView(row(*r.map { o -> btn(o) { pick(o) } }.toTypedArray())) }
+        showPanel(b)
+    }
+    private fun pick(c: String) {
+        closeMask()   // 选择后自动关闭黑色遮挡
+        val b = box()
+        b.addView(label("区间 $c ：结果是？"))
+        b.addView(row(btn("✔ 对", "#2ECC71") { record(c, true) }, btn("✘ 错", "#E74C3C") { record(c, false) }))
+        showPanel(b)
+    }
+    private fun record(c: String, ok: Boolean) {
+        Store.add(this, c, ok); refreshBubble(); closePanel()
+        val ctx = applicationContext; Thread { GitHub.sync(ctx) }.start()
+    }
+
+    // ---------- 黑色遮挡：可拖动、可缩放、可关闭 ----------
+    private fun openMask() {
+        if (mask != null) return
+        val a = Store.sp(this).getInt("mask_alpha", 100) * 255 / 100
+        val f = FrameLayout(this).apply { setBackgroundColor(Color.argb(a, 0, 0, 0)) }
+        val p = maskP ?: params(d(260), d(110)).apply { x = (sw - d(260)) / 2; y = d(300) }
+        maskP = p
+        val x = TextView(this).apply { text = "✕"; setTextColor(Color.WHITE); textSize = 18f; gravity = Gravity.CENTER; setOnClickListener { closeMask() } }
+        f.addView(x, FrameLayout.LayoutParams(d(40), d(40), Gravity.TOP or Gravity.END))
+        val h = TextView(this).apply { text = "◢"; setTextColor(Color.parseColor("#AAFFFFFF")); textSize = 20f; gravity = Gravity.CENTER }
+        f.addView(h, FrameLayout.LayoutParams(d(44), d(44), Gravity.BOTTOM or Gravity.END))
+        var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0
+        h.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; w0 = p.width; h0 = p.height }
+                MotionEvent.ACTION_MOVE -> {
+                    p.width = maxOf(d(60), w0 + (e.rawX - sx).toInt()); p.height = maxOf(d(40), h0 + (e.rawY - sy).toInt())
+                    wm.updateViewLayout(f, p)
+                }
+            }
+            true
+        }
+        drag(f, p, null)
+        wm.addView(f, p); mask = f
+        wm.removeView(bubble); wm.addView(bubble, bp)   // 悬浮球始终在最上层
+    }
+    private fun closeMask() { mask?.let { try { wm.removeView(it) } catch (_: Exception) {} }; mask = null }
+
+    // ---------- 记事本 ----------
+    private fun showNotes() {
+        closePanel(); if (noteWin != null) return
+        val b = box()
+        val et = EditText(this).apply { hint = "为什么出错？原因分析…"; minLines = 3; gravity = Gravity.TOP; textSize = 14f }
+        b.addView(label("错题记事本（自动同步GitHub）")); b.addView(et)
+        b.addView(row(
+            btn("保存") {
+                val t = et.text.toString().trim()
+                if (t.isNotEmpty()) {
+                    Store.addNote(this@FloatingService, t)
+                    val ctx = applicationContext; Thread { GitHub.sync(ctx) }.start()
+                    Toast.makeText(this@FloatingService, "已保存", Toast.LENGTH_SHORT).show()
+                }
+                closeNotes()
+            },
+            btn("取消", "#888888") { closeNotes() }))
+        val p = params(d(290), ViewGroup.LayoutParams.WRAP_CONTENT, true).apply { x = (sw - d(290)) / 2; y = d(90) }
+        wm.addView(b, p); noteWin = b
+    }
+    private fun closeNotes() { noteWin?.let { try { wm.removeView(it) } catch (_: Exception) {} }; noteWin = null }
+
+    override fun onDestroy() {
+        running = false; closePanel(); closeMask(); closeNotes()
+        try { wm.removeView(bubble) } catch (_: Exception) {}
+        super.onDestroy()
+    }
+}
