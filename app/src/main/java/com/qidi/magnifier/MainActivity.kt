@@ -1,5 +1,6 @@
 package com.qidi.magnifier
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -10,11 +11,14 @@ import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.widget.*
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : Activity() {
     private val BLUE = "#0084FF"
+    private val ORANGE = "#D4894A"
+    private var syncTv: TextView? = null
     private fun d(x: Int) = (x * resources.displayMetrics.density).toInt()
 
     override fun onCreate(b: Bundle?) {
@@ -23,16 +27,31 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
     }
-    override fun onResume() { super.onResume(); build() }
+    override fun onResume() { super.onResume(); build(); autoSync() }
+
+    /** 每次打开App自动同步 */
+    private fun autoSync() {
+        val sp = Store.sp(this)
+        if ((sp.getString("token", "") ?: "").isBlank()) return
+        syncTv?.text = "☁ 同步中…"
+        val x = applicationContext
+        Thread {
+            val m = GitHub.sync(x, true)
+            val t = SimpleDateFormat("MM-dd HH:mm", Locale.US).format(Date())
+            sp.edit().putString("last_sync", "$t  $m").apply()
+            runOnUiThread { syncTv?.text = "☁ $t  $m" }
+        }.start()
+    }
+    private fun bgSync() { val x = applicationContext; Thread { GitHub.sync(x) }.start() }
 
     private fun tv(t: String, sz: Float = 14f, col: String = "#1F2D3D", bold: Boolean = false) =
         TextView(this).apply { text = t; textSize = sz; setTextColor(Color.parseColor(col)); if (bold) paint.isFakeBoldText = true }
-    private fun blob(size: Int, g: Int, mx: Int, my: Int): View = View(this).apply {
+    private fun blob(size: Int, g: Int): View = View(this).apply {
         background = GradientDrawable().apply {
             gradientType = GradientDrawable.RADIAL_GRADIENT; gradientRadius = size / 2f
             colors = intArrayOf(Color.parseColor("#660084FF"), Color.parseColor("#000084FF"))
         }
-        layoutParams = FrameLayout.LayoutParams(size, size, g).apply { setMargins(mx, my, mx, my) }
+        layoutParams = FrameLayout.LayoutParams(size, size, g)
     }
     private fun card(title: String) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL; setPadding(d(16), d(14), d(16), d(14))
@@ -60,16 +79,26 @@ class MainActivity : Activity() {
             })
         })
     }
+    private fun editNotes(day: String) {
+        val et = EditText(this).apply { setText(Store.notes(this@MainActivity, day)); minLines = 6; gravity = Gravity.TOP; textSize = 14f }
+        AlertDialog.Builder(this).setTitle("$day 笔记").setView(et)
+            .setPositiveButton("保存") { _, _ -> Store.setNotes(this, day, et.text.toString()); bgSync(); build() }
+            .setNegativeButton("取消", null).show()
+    }
 
     private fun build() {
         val frame = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
-        frame.addView(blob(d(300), Gravity.TOP or Gravity.END, 0, 0))
-        frame.addView(blob(d(320), Gravity.BOTTOM or Gravity.START, 0, 0))
+        frame.addView(blob(d(300), Gravity.TOP or Gravity.END))
+        frame.addView(blob(d(320), Gravity.BOTTOM or Gravity.START))
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(d(16), d(20), d(16), d(30)) }
         frame.addView(ScrollView(this).apply { addView(col) })
         setContentView(frame)
+        val sp = Store.sp(this)
 
-        col.addView(tv("奇的放大镜", 28f, BLUE, true).apply { setPadding(d(4), 0, 0, d(14)) })
+        col.addView(tv("奇的放大镜", 28f, BLUE, true).apply { setPadding(d(4), 0, 0, d(2)) })
+        syncTv = tv(if ((sp.getString("token", "") ?: "").isBlank()) "☁ 未配置GitHub同步（见最下方）" else "☁ " + (sp.getString("last_sync", "") ?: ""), 12f, "#5A6B7F")
+            .apply { setPadding(d(4), 0, 0, d(12)) }
+        col.addView(syncTv)
 
         // 7日胜率
         val today = Store.today()
@@ -78,6 +107,16 @@ class MainActivity : Activity() {
         c1.addView(tv(if (a7 == null) "--" else "%.1f%%".format(a7 * 100), 40f, BLUE, true))
         c1.addView(tv("今日：${Store.correct(this, today)}/${Store.total(this, today)}  准确率 ${"%.0f".format(Store.rate(this, today) * 100)}%", 14f))
         col.addView(c1)
+
+        // 关键词统计（紧跟胜率）
+        val (okK, badK) = Store.keywordStats(this)
+        val ck = card("高频关键词（来自你选的内容类型与特征）")
+        fun kwLine(title: String, color: String, l: List<Pair<String, Int>>) {
+            ck.addView(tv(title, 14f, color, true).apply { setPadding(0, d(8), 0, d(2)) })
+            ck.addView(tv(if (l.isEmpty()) "暂无" else l.take(8).joinToString("   ") { "${it.first}×${it.second}" }, 14f))
+        }
+        kwLine("✔ 正确", BLUE, okK); kwLine("✘ 错误", ORANGE, badK)
+        col.addView(ck)
 
         // 评分
         val c2 = card("今日评分（1-10）")
@@ -88,17 +127,17 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor(if (i == cur) "#FFFFFF" else BLUE))
             background = GradientDrawable().apply { setColor(Color.parseColor(if (i == cur) BLUE else "#22FFFFFF")); cornerRadius = d(8).toFloat(); setStroke(d(1), Color.parseColor("#550084FF")) }
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(d(2), d(6), d(2), 0) }
-            setOnClickListener { Store.setScore(this@MainActivity, today, i); val x = applicationContext; Thread { GitHub.sync(x) }.start(); build() }
+            setOnClickListener { Store.setScore(this@MainActivity, today, i); bgSync(); build() }
         })
         c2.addView(r)
         val a15 = Store.avgScore15(this)
         c2.addView(tv(if (a15 == null) "近15日均分：暂无" else "近15日均分：%.1f".format(a15), 14f).apply { setPadding(0, d(10), 0, 0) })
-        if (a15 != null && a15 < 5f) c2.addView(tv("⚠ 内容创意存在严重不足，需要提高胜率以及内容敏感度", 14f, "#E74C3C", true).apply { setPadding(0, d(6), 0, 0) })
+        if (a15 != null && a15 < 5f) c2.addView(tv("⚠ 内容创意存在严重不足，需要提高胜率以及内容敏感度", 14f, ORANGE, true).apply { setPadding(0, d(6), 0, 0) })
         col.addView(c2)
 
         // 悬浮窗
         val c3 = card("悬浮窗")
-        c3.addView(button(if (FloatingService.running) "关闭悬浮窗" else "开启悬浮窗", if (FloatingService.running) "#E74C3C" else BLUE) {
+        c3.addView(button(if (FloatingService.running) "关闭悬浮窗" else "开启悬浮窗", if (FloatingService.running) ORANGE else BLUE) {
             if (FloatingService.running) { stopService(Intent(this, FloatingService::class.java)); build() }
             else if (!Settings.canDrawOverlays(this)) startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             else { startForegroundService(Intent(this, FloatingService::class.java)); build() }
@@ -107,24 +146,56 @@ class MainActivity : Activity() {
         slider("黑色遮挡透明度", "mask_alpha", 100, c3)
         col.addView(c3)
 
+        // 记事本
+        val c6 = card("错题记事本（点一条可查看/修改）")
+        val nd = Store.noteDates(this).take(10)
+        if (nd.isEmpty()) c6.addView(tv("还没有笔记。可在悬浮窗记事本里记，也可以点下面按钮直接写。"))
+        nd.forEach { day ->
+            val preview = Store.notes(this, day).lines().filter { it.isNotBlank() }.take(2).joinToString("\n")
+            c6.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(0, d(8), 0, d(4))
+                addView(tv(day, 13f, BLUE, true)); addView(tv(preview, 14f))
+                setOnClickListener { editNotes(day) }
+            })
+        }
+        c6.addView(button("＋ 写今天的笔记") { editNotes(today) })
+        col.addView(c6)
+
         // 排行榜
-        val c4 = card("准确率排行榜（本机，GitHub上有完整版 LEADERBOARD.md）")
+        val c4 = card("准确率排行榜（GitHub 上有完整版 LEADERBOARD.md）")
         val top = Store.dates(this).filter { Store.total(this, it) > 0 }.sortedWith(compareByDescending<String> { Store.rate(this, it) }.thenByDescending { Store.total(this, it) }).take(7)
         if (top.isEmpty()) c4.addView(tv("暂无数据"))
         top.forEachIndexed { i, dt -> c4.addView(tv("${i + 1}. $dt   ${"%.1f".format(Store.rate(this, dt) * 100)}%  (${Store.correct(this, dt)}/${Store.total(this, dt)})")) }
         col.addView(c4)
 
+        // 选项管理
+        val c7 = card("选项管理（一行一个，可增删改）")
+        val ets = LinkedHashMap<String, EditText>()
+        Store.OPTION_TITLES.forEach { (k, title) ->
+            c7.addView(tv(title, 14f, if (k.startsWith("ok")) BLUE else ORANGE, true).apply { setPadding(0, d(10), 0, 0) })
+            val et = EditText(this).apply {
+                setText(Store.options(this@MainActivity, k).joinToString("\n")); textSize = 14f
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; minLines = 3
+            }
+            ets[k] = et; c7.addView(et)
+        }
+        c7.addView(button("保存选项") {
+            ets.forEach { (k, e) -> Store.setOptions(this, k, e.text.toString()) }
+            Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show(); bgSync()
+        })
+        c7.addView(button("恢复默认选项", "#7F8FA3") { Store.resetOptions(this); bgSync(); build() })
+        col.addView(c7)
+
         // GitHub
-        val c5 = card("GitHub 同步")
-        val sp = Store.sp(this)
+        val c5 = card("GitHub 同步（打开App时自动同步）")
         fun field(h: String, k: String, pw: Boolean = false) = EditText(this).apply {
             hint = h; setText(sp.getString(k, "")); textSize = 14f; setSingleLine()
             if (pw) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        val fo = field("GitHub 用户名", "owner"); val fr = field("仓库名（需已存在）", "repo"); val ft = field("Token（仅需该仓库 Contents 读写）", "token", true)
+        val fo = field("GitHub 用户名", "owner"); val fr = field("仓库名（需已存在）", "repo"); val ft = field("Token", "token", true)
         c5.addView(fo); c5.addView(fr); c5.addView(ft)
         val status = tv("", 13f, "#5A6B7F")
-        c5.addView(button("保存并全量同步") {
+        c5.addView(button("保存并立即同步") {
             sp.edit().putString("owner", fo.text.toString().trim()).putString("repo", fr.text.toString().trim()).putString("token", ft.text.toString().trim()).apply()
             status.text = "同步中…"; val x = applicationContext
             Thread { val m = GitHub.sync(x, true); runOnUiThread { status.text = m } }.start()

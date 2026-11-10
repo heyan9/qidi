@@ -16,7 +16,7 @@ class BubbleView(c: Context) : View(c) {
         p.style = Paint.Style.FILL; p.color = Color.parseColor("#CC1B1B1F"); cv.drawCircle(r, r, r, p)
         val path = Path().apply { addCircle(r, r, r - 3, Path.Direction.CW) }
         cv.save(); cv.clipPath(path)
-        p.color = Color.parseColor(when { t == 0 -> "#660084FF"; rate >= 0.6f -> "#CC2ECC71"; rate >= 0.4f -> "#CCF5A623"; else -> "#CCE74C3C" })
+        p.color = Color.parseColor(when { t == 0 -> "#660084FF"; rate >= 0.6f -> "#CC0084FF"; rate >= 0.4f -> "#CC6CB4FF"; else -> "#CCD4894A" })
         cv.drawRect(0f, w - w * rate, w, w, p)   // 像电量一样从下往上充
         cv.restore()
         p.style = Paint.Style.FILL; p.color = Color.WHITE; p.textAlign = Paint.Align.CENTER; p.isFakeBoldText = true
@@ -132,12 +132,16 @@ class FloatingService : Service() {
     private fun row(vararg v: View) = LinearLayout(this).apply { v.forEach { addView(it) } }
 
     // ---------- 选项面板：跟随悬浮球 ----------
+    private var pendingSync = false
     private fun togglePanel() {
-        if (panel != null) { closePanel(); if (reopenMask) { reopenMask = false; openMask() } } else showMenu()
+        if (panel != null) {
+            closePanel(); if (reopenMask) { reopenMask = false; openMask() }
+            if (pendingSync) { pendingSync = false; val c = applicationContext; Thread { GitHub.sync(c) }.start() }
+        } else showMenu()
     }
     private fun closePanel() { panel?.let { try { wm.removeView(it) } catch (_: Exception) {} }; panel = null }
     private fun place(p: WindowManager.LayoutParams, h: Int) {
-        p.x = minOf(maxOf(bp.x, 0), maxOf(0, sw - d(250)))
+        p.x = minOf(maxOf(bp.x, 0), maxOf(0, sw - d(270)))
         p.y = bp.y + d(56) + d(6)
         if (p.y + h > sh) p.y = maxOf(0, bp.y - h - d(6))
     }
@@ -147,18 +151,34 @@ class FloatingService : Service() {
     }
     private fun showPanel(b: View) {
         closePanel()
-        val p = params(d(250), ViewGroup.LayoutParams.WRAP_CONTENT); place(p, d(240))
+        val p = params(d(270), ViewGroup.LayoutParams.WRAP_CONTENT); place(p, d(240))
         wm.addView(b, p); panel = b; panelP = p
         b.post { followPanel() }
     }
+    private fun grid(items: List<String>, cols: Int, mk: (String) -> View): LinearLayout {
+        val g = LinearLayout(this); g.orientation = LinearLayout.VERTICAL
+        items.chunked(cols).forEach { r ->
+            val vs = r.map(mk).toMutableList()
+            while (vs.size < cols) vs.add(View(this).also { it.layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            g.addView(row(*vs.toTypedArray()))
+        }
+        return g
+    }
+    private fun setBg(v: View, c: String) { (v.background as GradientDrawable).setColor(Color.parseColor(c)) }
+    private fun chip(t: String, sel: MutableSet<String>): TextView {
+        val v = btn(t) {}; v.textSize = 13f
+        v.setOnClickListener { if (sel.remove(t)) setBg(v, "#2C2C31") else { sel.add(t); setBg(v, "#0084FF") } }
+        return v
+    }
+
     private fun showMenu() {
         val b = box()
         b.addView(label("选择区间"))
         b.addView(row(
             btn(if (mask != null) "关遮挡" else "黑遮挡") { closePanel(); if (mask != null) closeMask() else openMask() },
             btn("记事本") { showNotes() },
-            btn("退出", "#7A2B2B") { stopSelf() }))
-        listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+").chunked(3).forEach { r -> b.addView(row(*r.map { o -> btn(o) { pick(o) } }.toTypedArray())) }
+            btn("退出", "#8F5F36") { stopSelf() }))
+        b.addView(grid(listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+"), 3) { o -> btn(o) { pick(o) } })
         showPanel(b)
     }
     private fun pick(c: String) {
@@ -166,14 +186,44 @@ class FloatingService : Service() {
         closeMask()
         val b = box()
         b.addView(label("区间 $c ：结果是？"))
-        b.addView(row(btn("✔ 对", "#1E9E5A") { record(c, true) }, btn("✘ 错", "#C0392B") { record(c, false) }))
+        b.addView(row(btn("✔ 对", "#0084FF") { judge(c, true) }, btn("✘ 错", "#D4894A") { judge(c, false) }))
         showPanel(b)
     }
-    private fun record(c: String, ok: Boolean) {
+    private fun judge(c: String, ok: Boolean) {
         Store.add(this, c, ok); refreshBubble()
         if (reopenMask) { reopenMask = false; openMask() }   // 黑色遮挡重新打开
-        showMenu()                                            // 选项自动再弹出
-        val ctx = applicationContext; Thread { GitHub.sync(ctx) }.start()
+        pendingSync = true
+        showTypes(ok)
+    }
+    private fun finishFlow() {
+        pendingSync = false; refreshBubble()
+        val c = applicationContext; Thread { GitHub.sync(c) }.start()
+        showMenu()
+    }
+    private fun showTypes(ok: Boolean) {
+        val items = Store.options(this, if (ok) "ok_type" else "bad_type")
+        if (items.isEmpty()) { finishFlow(); return }
+        val b = box()
+        b.addView(label(if (ok) "✔ 选择内容类型" else "✘ 选择内容类型"))
+        b.addView(grid(items, 3) { t -> btn(t) { showTags(ok, t) } })
+        b.addView(row(btn("跳过") { finishFlow() }))
+        showPanel(b)
+    }
+    private fun showTags(ok: Boolean, type: String) {
+        Store.setLastTags(this, type, emptyList())
+        val items = Store.options(this, if (ok) "ok_tag" else "bad_tag")
+        if (items.isEmpty()) { finishFlow(); return }
+        val sel = linkedSetOf<String>()
+        val b = box()
+        b.addView(label("$type · 选择特征（可多选）"))
+        val sv = ScrollView(this)
+        sv.addView(grid(items, 2) { t -> chip(t, sel) })
+        sv.layoutParams = LinearLayout.LayoutParams(-1, minOf(d(300), sh / 2 - d(60)))
+        b.addView(sv)
+        b.addView(row(
+            btn("完成", "#0084FF") { Store.setLastTags(this@FloatingService, type, sel.toList()); finishFlow() },
+            btn("跳过") { finishFlow() }))
+        showPanel(b)
     }
 
     // ---------- 黑色遮挡（位置大小记忆） ----------
@@ -215,7 +265,7 @@ class FloatingService : Service() {
         val handle = TextView(this).apply { text = "◢"; setTextColor(Color.parseColor("#AAFFFFFF")); textSize = 20f; gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(d(44), d(44)) }
         b.addView(title); b.addView(et); b.addView(label("透明度")); b.addView(seek)
         b.addView(row(
-            btn("保存", "#1E9E5A") {
+            btn("保存", "#0084FF") {
                 val t = et.text.toString().trim()
                 if (t.isNotEmpty()) {
                     Store.addNote(this@FloatingService, t)
