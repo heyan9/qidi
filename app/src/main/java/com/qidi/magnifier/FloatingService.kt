@@ -154,6 +154,7 @@ class FloatingService : Service() {
     private fun showPanel(b: View) {
         closePanel()
         val p = params(d(270), ViewGroup.LayoutParams.WRAP_CONTENT); place(p, d(240))
+        b.alpha = sp().getInt("panel_alpha", 100) / 100f
         wm.addView(b, p); panel = b; panelP = p
         b.post { followPanel() }
     }
@@ -183,6 +184,15 @@ class FloatingService : Service() {
             btn("截屏") { shoot() },
             btn("退出", "#E0701A") { stopSelf() }))
         b.addView(grid(listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+"), 3) { o -> btn(o) { pick(o) } })
+        b.addView(label("弹窗透明度（看视频时调低）"))
+        val sk = SeekBar(this)
+        sk.max = 70; sk.progress = sp().getInt("panel_alpha", 100) - 30
+        sk.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) { b.alpha = (p + 30) / 100f; sp().edit().putInt("panel_alpha", p + 30).apply() }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+        b.addView(sk)
         showPanel(b)
     }
     private fun pick(c: String) {
@@ -256,6 +266,7 @@ class FloatingService : Service() {
             },
             btn("取消") { closeAdd() }))
         val p = params(d(270), ViewGroup.LayoutParams.WRAP_CONTENT, true).apply { x = (sw - d(270)) / 2; y = d(80) }
+        b.alpha = sp().getInt("panel_alpha", 100) / 100f
         wm.addView(b, p); addWin = b
     }
     private fun closeAdd() { addWin?.let { try { wm.removeView(it) } catch (_: Exception) {} }; addWin = null }

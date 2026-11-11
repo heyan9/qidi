@@ -88,7 +88,7 @@ object GitHub {
             for (d in days) {
                 val lg = Store.log(c, d); val nt = Store.notes(c, d)
                 if (lg.isNotEmpty()) putAuto(tok, o, r, "logs/$d.csv", "time,choice,correct,type,positive,negative\n$lg")
-                if (nt.isNotBlank()) putAuto(tok, o, r, "notes/$d.md", "# $d 错题笔记\n\n$nt\n")
+                if (nt.isNotBlank()) { putAuto(tok, o, r, "notes/$d.md", "# $d 错题笔记\n\n$nt\n"); sp.edit().putString("nb_$d", nt.trim()).apply() }
             }
             val up = Shots.uploaded(c)
             for (f in Shots.files(c)) {
@@ -100,12 +100,12 @@ object GitHub {
         } catch (e: Exception) { "同步失败：" + e.message }
     }
 
-    private fun list(t: String, o: String, r: String, path: String): List<String> {
+    private fun list(t: String, o: String, r: String, path: String): List<Pair<String, String>> {
         val (c, s) = call("GET", "https://api.github.com/repos/$o/$r/contents/$path", t, null)
         if (c == 404) return emptyList()
         if (c != 200) throw Exception("读取目录$path 失败($c)")
         val a = JSONArray(s)
-        return (0 until a.length()).map { a.getJSONObject(it).getString("name") }
+        return (0 until a.length()).map { a.getJSONObject(it).getString("name") to a.getJSONObject(it).optString("sha") }
     }
 
     /** 从云端把本地缺少的数据拉回来（重装App后恢复）。返回 (恢复的天数, 错误信息或null)。只补空缺，不覆盖本地已有数据 */
@@ -124,7 +124,7 @@ object GitHub {
                     if (Store.score(c, d) == 0 && e.optInt("score") > 0) Store.setScore(c, d, e.optInt("score"))
                 }
             }
-            for (name in list(tok, o, r, "logs")) {
+            for ((name, _) in list(tok, o, r, "logs")) {
                 if (!name.endsWith(".csv")) continue
                 val d = name.removeSuffix(".csv")
                 if (Store.log(c, d).isNotEmpty()) continue
@@ -133,13 +133,24 @@ object GitHub {
                 Store.setLog(c, d, body.joinToString("\n") + "\n")
                 Store.setCounts(c, d, body.size, body.count { it.split(",").getOrNull(2) == "1" })
             }
-            for (name in list(tok, o, r, "notes")) {
+            for ((name, sha) in list(tok, o, r, "notes")) {
                 if (!name.endsWith(".md")) continue
                 val d = name.removeSuffix(".md")
-                if (Store.notes(c, d).isNotBlank()) continue
+                if (sp.getString("nsha_$d", null) == sha && Store.notes(c, d).isNotBlank()) continue   // 云端没变
                 val (txt, _) = get(tok, o, r, "notes/$name"); if (txt == null) continue
-                val body = txt.substringAfter("错题笔记\n\n", "").trim()
-                if (body.isNotEmpty()) Store.setNotes(c, d, body)
+                val remote = txt.substringAfter("错题笔记\n\n", "").trim()
+                val local = Store.notes(c, d).trim(); val base = sp.getString("nb_$d", null)
+                when {
+                    local.isEmpty() -> { Store.setNotes(c, d, remote); n++ }
+                    remote == local -> {}
+                    base != null && remote == base -> {}                                   // 云端没改，手机改了：等上传
+                    base != null && local == base -> { Store.setNotes(c, d, remote); n++ } // 网页端改了：采用云端
+                    local.startsWith(remote) -> {}
+                    remote.startsWith(local) -> { Store.setNotes(c, d, remote); n++ }
+                    else -> { Store.setNotes(c, d, remote + "\n\n" + local); n++ }       // 两边都改了：合并
+                }
+                val now = Store.notes(c, d).trim()
+                sp.edit().putString("nsha_$d", sha).putString("nb_$d", if (now == remote) remote else (base ?: remote)).apply()
             }
             val (op, _) = get(tok, o, r, "config/options.json")
             if (op != null) {

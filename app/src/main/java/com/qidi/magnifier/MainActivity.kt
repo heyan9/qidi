@@ -3,6 +3,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -24,7 +25,19 @@ import java.util.*
 class MainActivity : Activity() {
     private val BLUE = "#0084FF"
     private val ORANGE = "#FF8A2B"
-    private val GRAY = "#5A6B7F"
+    private fun isDark(): Boolean = when (Store.sp(this).getInt("theme", 0)) {
+        1 -> false; 2 -> true
+        else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+    }
+    private val dk get() = isDark()
+    private val T get() = if (dk) "#E6EAF0" else T
+    private val GRAY get() = if (dk) "#8A96A6" else "#5A6B7F"
+    private val BG get() = if (dk) "#101318" else "#FFFFFF"
+    private val CARD get() = if (dk) "#1A2029" else "#99D6EBFF"
+    private val CARD_LINE get() = if (dk) "#2B3644" else "#400084FF"
+    private val TABBG get() = if (dk) "#151A21" else "#F2F8FF"
+    private val CHIP_OFF get() = if (dk) "#222B36" else CHIP_OFF
+    private fun dlg() = if (dk) AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert) else dlg()
     private var syncTv: TextView? = null
     private var tab = 0
     private var week = Shots.thisWeek()
@@ -57,18 +70,18 @@ class MainActivity : Activity() {
     private fun bgSync() { val x = applicationContext; Thread { GitHub.sync(x) }.start() }
 
     // ---------- 通用控件 ----------
-    private fun tv(t: String, sz: Float = 14f, col: String = "#1F2D3D", bold: Boolean = false) =
+    private fun tv(t: String, sz: Float = 14f, col: String = T, bold: Boolean = false) =
         TextView(this).apply { text = t; textSize = sz; setTextColor(Color.parseColor(col)); if (bold) paint.isFakeBoldText = true }
     private fun blob(size: Int, g: Int): View = View(this).apply {
         background = GradientDrawable().apply {
             gradientType = GradientDrawable.RADIAL_GRADIENT; gradientRadius = size / 2f
-            colors = intArrayOf(Color.parseColor("#660084FF"), Color.parseColor("#000084FF"))
+            colors = intArrayOf(Color.parseColor(if (dk) "#2A0084FF" else "#660084FF"), Color.parseColor("#000084FF"))
         }
         layoutParams = FrameLayout.LayoutParams(size, size, g)
     }
     private fun card(title: String) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL; setPadding(d(16), d(14), d(16), d(14))
-        background = GradientDrawable().apply { setColor(Color.parseColor("#99D6EBFF")); cornerRadius = d(20).toFloat(); setStroke(d(1), Color.parseColor("#400084FF")) }
+        background = GradientDrawable().apply { setColor(Color.parseColor(CARD)); cornerRadius = d(20).toFloat(); setStroke(d(1), Color.parseColor(CARD_LINE)) }
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, 0, 0, d(12)) }
         if (title.isNotEmpty()) addView(tv(title, 13f, GRAY))
     }
@@ -81,7 +94,7 @@ class MainActivity : Activity() {
     private fun chip(t: String, on: Boolean, click: () -> Unit) = TextView(this).apply {
         text = t; textSize = 13f; gravity = Gravity.CENTER; setPadding(d(14), d(7), d(14), d(7))
         setTextColor(Color.parseColor(if (on) "#FFFFFF" else BLUE))
-        background = GradientDrawable().apply { setColor(Color.parseColor(if (on) BLUE else "#22FFFFFF")); cornerRadius = d(16).toFloat(); setStroke(d(1), Color.parseColor("#550084FF")) }
+        background = GradientDrawable().apply { setColor(Color.parseColor(if (on) BLUE else CHIP_OFF)); cornerRadius = d(16).toFloat(); setStroke(d(1), Color.parseColor("#550084FF")) }
         layoutParams = LinearLayout.LayoutParams(-2, -2).apply { setMargins(0, 0, d(6), 0) }
         setOnClickListener { click() }
     }
@@ -101,15 +114,17 @@ class MainActivity : Activity() {
     }
     private fun editNotes(day: String) {
         val et = EditText(this).apply { setText(Store.notes(this@MainActivity, day)); minLines = 6; gravity = Gravity.TOP; textSize = 14f }
-        AlertDialog.Builder(this).setTitle("$day 笔记").setView(et)
+        dlg().setTitle("$day 笔记").setView(et)
             .setPositiveButton("保存") { _, _ -> Store.setNotes(this, day, et.text.toString()); bgSync(); build() }
             .setNegativeButton("取消", null).show()
     }
 
     // ---------- 框架：内容 + 底部标签栏 ----------
     private fun build() {
+        window.statusBarColor = Color.parseColor(BG); window.navigationBarColor = Color.parseColor(BG)
+        window.decorView.systemUiVisibility = if (dk) 0 else View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val frame = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        val frame = FrameLayout(this).apply { setBackgroundColor(Color.parseColor(BG)) }
         frame.addView(blob(d(300), Gravity.TOP or Gravity.END))
         frame.addView(blob(d(320), Gravity.BOTTOM or Gravity.START))
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(d(16), d(20), d(16), d(20)) }
@@ -122,7 +137,7 @@ class MainActivity : Activity() {
     }
     private fun tabBar(): LinearLayout {
         val bar = LinearLayout(this)
-        bar.setBackgroundColor(Color.parseColor("#F2F8FF")); bar.setPadding(0, d(6), 0, d(6))
+        bar.setBackgroundColor(Color.parseColor(TABBG)); bar.setPadding(0, d(6), 0, d(6))
         listOf("🏠\n首页", "🏷️\n关键词", "🔥\n热门", "📝\n笔记", "⚙️\n设置").forEachIndexed { i, t ->
             bar.addView(TextView(this).apply {
                 text = t; gravity = Gravity.CENTER; textSize = 11f; setPadding(0, d(4), 0, d(4))
@@ -151,6 +166,7 @@ class MainActivity : Activity() {
         })
         slider("小圆标透明度", "bubble_alpha", 100, c3)
         slider("黑色遮挡透明度", "mask_alpha", 100, c3)
+        slider("选项弹窗透明度（看视频时调低）", "panel_alpha", 100, c3)
         col.addView(c3)
 
         val c1 = card("近7日平均胜率")
@@ -165,7 +181,7 @@ class MainActivity : Activity() {
         for (i in 1..10) r.addView(TextView(this).apply {
             text = "$i"; gravity = Gravity.CENTER; textSize = 14f; setPadding(0, d(10), 0, d(10))
             setTextColor(Color.parseColor(if (i == cur) "#FFFFFF" else BLUE))
-            background = GradientDrawable().apply { setColor(Color.parseColor(if (i == cur) BLUE else "#22FFFFFF")); cornerRadius = d(8).toFloat(); setStroke(d(1), Color.parseColor("#550084FF")) }
+            background = GradientDrawable().apply { setColor(Color.parseColor(if (i == cur) BLUE else CHIP_OFF)); cornerRadius = d(8).toFloat(); setStroke(d(1), Color.parseColor("#550084FF")) }
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(d(2), d(6), d(2), 0) }
             setOnClickListener { Store.setScore(this@MainActivity, today, i); bgSync(); build() }
         })
@@ -186,7 +202,7 @@ class MainActivity : Activity() {
     private fun kwTable(parent: LinearLayout, title: String, color: String, l: List<Store.KW>, ks: Store.KStats) {
         parent.addView(tv(title, 14f, color, true).apply { setPadding(0, d(10), 0, d(4)) })
         if (l.isEmpty()) { parent.addView(tv("暂无")); return }
-        fun cell(t: String, w: Float, c: String = "#1F2D3D", b: Boolean = false) = tv(t, 13f, c, b).apply { layoutParams = LinearLayout.LayoutParams(0, -2, w) }
+        fun cell(t: String, w: Float, c: String = T, b: Boolean = false) = tv(t, 13f, c, b).apply { layoutParams = LinearLayout.LayoutParams(0, -2, w) }
         parent.addView(LinearLayout(this).apply {
             addView(cell("关键词", 2.2f, GRAY)); addView(cell("次数", 1f, GRAY)); addView(cell("占比", 1f, GRAY)); addView(cell("正确率", 1.2f, GRAY))
         })
@@ -194,7 +210,7 @@ class MainActivity : Activity() {
             parent.addView(LinearLayout(this).apply {
                 setPadding(0, d(3), 0, d(3))
                 addView(cell(k.w, 2.2f)); addView(cell("${k.n}", 1f)); addView(cell("${ks.share(k)}%", 1f))
-                addView(cell("${k.pct}%", 1.2f, if (k.pct >= 60) BLUE else if (k.pct < 40) ORANGE else "#1F2D3D", true))
+                addView(cell("${k.pct}%", 1.2f, if (k.pct >= 60) BLUE else if (k.pct < 40) ORANGE else T, true))
             })
         }
     }
@@ -217,7 +233,7 @@ class MainActivity : Activity() {
         c0.addView(tv("共记录 $allN 道题，其中 $tagN 道选了类型/关键词（只统计选过的）", 12f, GRAY).apply { setPadding(0, d(2), 0, 0) })
         col.addView(c0)
         val c1 = card("")
-        if (typeFilter == null) kwTable(c1, "内容类型", "#1F2D3D", ks.lists["type"]!!, ks)
+        if (typeFilter == null) kwTable(c1, "内容类型", T, ks.lists["type"]!!, ks)
         kwTable(c1, "✔ 正向关键词", BLUE, ks.lists["pos"]!!, ks)
         kwTable(c1, "✘ 反向关键词", ORANGE, ks.lists["neg"]!!, ks)
         col.addView(c1)
@@ -243,7 +259,7 @@ class MainActivity : Activity() {
     private fun pickWeek() {
         val ws = (Shots.weeks(this) + Shots.thisWeek()).distinct().sortedDescending()
         val labels = ws.map { "${Shots.weekLabel(it)}（${Shots.inWeek(this, it).size}张）" + (if (it == Shots.thisWeek()) " 本周" else "") }.toTypedArray()
-        AlertDialog.Builder(this).setTitle("跳转到某一周").setItems(labels) { _, i -> week = ws[i]; build() }.show()
+        dlg().setTitle("跳转到某一周").setItems(labels) { _, i -> week = ws[i]; build() }.show()
     }
     private fun showShot(f: File) {
         val dlg = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
@@ -253,7 +269,7 @@ class MainActivity : Activity() {
         iv.setOnClickListener { dlg.dismiss() }
         val bar = LinearLayout(this)
         bar.addView(button("删除", ORANGE) {
-            AlertDialog.Builder(this).setMessage("删除这张截屏？（云端也会删除）")
+            dlg().setMessage("删除这张截屏？（云端也会删除）")
                 .setPositiveButton("删除") { _, _ ->
                     Shots.delete(this, f.name); dlg.dismiss(); build()
                     val x = applicationContext
@@ -280,7 +296,7 @@ class MainActivity : Activity() {
         val nav = card("")
         val nr = LinearLayout(this); nr.gravity = Gravity.CENTER_VERTICAL
         nr.addView(tv("‹ 上一周", 14f, BLUE, true).apply { setPadding(0, d(8), d(12), d(8)); setOnClickListener { week = Shots.shiftWeek(week, -1); build() } })
-        nr.addView(tv(Shots.weekLabel(week) + (if (week == Shots.thisWeek()) "（本周）" else "") + " ▾", 15f, "#1F2D3D", true).apply {
+        nr.addView(tv(Shots.weekLabel(week) + (if (week == Shots.thisWeek()) "（本周）" else "") + " ▾", 15f, T, true).apply {
             gravity = Gravity.CENTER; layoutParams = LinearLayout.LayoutParams(0, -2, 1f); setOnClickListener { pickWeek() }
         })
         nr.addView(tv(if (week < Shots.thisWeek()) "下一周 ›" else "      ", 14f, BLUE, true).apply {
@@ -296,7 +312,7 @@ class MainActivity : Activity() {
             val row = LinearLayout(this)
             r.forEach { f ->
                 val iv = ImageView(this); iv.scaleType = ImageView.ScaleType.CENTER_CROP
-                iv.setBackgroundColor(Color.parseColor("#E3EEF9"))
+                iv.setBackgroundColor(Color.parseColor(if (dk) "#222B36" else "#E3EEF9"))
                 iv.layoutParams = LinearLayout.LayoutParams(cellW, cellW * 16 / 10).apply { setMargins(d(2), d(2), d(2), d(2)) }
                 iv.setOnClickListener { showShot(f) }
                 loadInto(iv, f, 3); row.addView(iv)
@@ -326,9 +342,15 @@ class MainActivity : Activity() {
     private fun pageSettings(col: LinearLayout) {
         title(col, "设置")
         val sp = Store.sp(this)
+        val ct = card("外观")
+        val tr = LinearLayout(this)
+        listOf("跟随系统", "日间", "夜间").forEachIndexed { i, t ->
+            tr.addView(chip(t, Store.sp(this).getInt("theme", 0) == i) { Store.sp(this).edit().putInt("theme", i).apply(); build() })
+        }
+        tr.setPadding(0, d(8), 0, 0); ct.addView(tr); col.addView(ct)
         val c5 = card("GitHub 同步（打开App时自动同步，重装后会自动恢复）")
         fun field(h: String, k: String, pw: Boolean = false) = EditText(this).apply {
-            hint = h; setText(sp.getString(k, "")); textSize = 14f; setSingleLine()
+            hint = h; setTextColor(Color.parseColor(T)); setHintTextColor(Color.parseColor(GRAY)); setText(sp.getString(k, "")); textSize = 14f; setSingleLine()
             if (pw) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         val fo = field("GitHub 用户名", "owner"); val fr = field("仓库名（需已存在）", "repo"); val ft = field("Token", "token", true)
@@ -343,9 +365,9 @@ class MainActivity : Activity() {
         val c7 = card("选项管理（一行一个，可增删改）")
         val ets = LinkedHashMap<String, EditText>()
         Store.OPTION_TITLES.forEach { (k, ttl) ->
-            c7.addView(tv(ttl, 14f, when (k) { "pos" -> BLUE; "neg" -> ORANGE; else -> "#1F2D3D" }, true).apply { setPadding(0, d(10), 0, 0) })
+            c7.addView(tv(ttl, 14f, when (k) { "pos" -> BLUE; "neg" -> ORANGE; else -> T }, true).apply { setPadding(0, d(10), 0, 0) })
             val et = EditText(this).apply {
-                setText(Store.options(this@MainActivity, k).joinToString("\n")); textSize = 14f
+                setTextColor(Color.parseColor(T)); setHintTextColor(Color.parseColor(GRAY)); setText(Store.options(this@MainActivity, k).joinToString("\n")); textSize = 14f
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; minLines = 3
             }
             ets[k] = et; c7.addView(et)
@@ -356,6 +378,6 @@ class MainActivity : Activity() {
         })
         c7.addView(button("恢复默认选项", "#7F8FA3") { Store.resetOptions(this); bgSync(); build() })
         col.addView(c7)
-        col.addView(tv("奇的放大镜 v2.0", 12f, GRAY).apply { setPadding(d(4), d(4), 0, 0) })
+        col.addView(tv("奇的放大镜 v2.2", 12f, GRAY).apply { setPadding(d(4), d(4), 0, 0) })
     }
 }
