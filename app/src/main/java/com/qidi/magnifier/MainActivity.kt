@@ -30,14 +30,14 @@ class MainActivity : Activity() {
         else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     }
     private val dk get() = isDark()
-    private val T get() = if (dk) "#E6EAF0" else T
+    private val T: String get() = if (dk) "#E6EAF0" else "#263445"
     private val GRAY get() = if (dk) "#8A96A6" else "#5A6B7F"
     private val BG get() = if (dk) "#101318" else "#FFFFFF"
     private val CARD get() = if (dk) "#1A2029" else "#99D6EBFF"
     private val CARD_LINE get() = if (dk) "#2B3644" else "#400084FF"
     private val TABBG get() = if (dk) "#151A21" else "#F2F8FF"
-    private val CHIP_OFF get() = if (dk) "#222B36" else CHIP_OFF
-    private fun dlg() = if (dk) AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert) else dlg()
+    private val CHIP_OFF: String get() = if (dk) "#222B36" else "#EEF5FF"
+    private fun dlg(): AlertDialog.Builder = if (dk) AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert) else AlertDialog.Builder(this)
     private var syncTv: TextView? = null
     private var tab = 0
     private var week = Shots.thisWeek()
