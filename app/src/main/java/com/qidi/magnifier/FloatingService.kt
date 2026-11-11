@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.*
 import android.widget.*
 
@@ -178,6 +180,7 @@ class FloatingService : Service() {
         b.addView(row(
             btn(if (mask != null) "关遮挡" else "黑遮挡") { closePanel(); if (mask != null) closeMask() else openMask() },
             btn("记事本") { showNotes() },
+            btn("截屏") { shoot() },
             btn("退出", "#E0701A") { stopSelf() }))
         b.addView(grid(listOf("1", "2", "3", "4", "5", "5-8", "8-1k", "1k+", "2k+"), 3) { o -> btn(o) { pick(o) } })
         showPanel(b)
@@ -256,6 +259,24 @@ class FloatingService : Service() {
         wm.addView(b, p); addWin = b
     }
     private fun closeAdd() { addWin?.let { try { wm.removeView(it) } catch (_: Exception) {} }; addWin = null }
+
+    // ---------- 截屏：先隐藏悬浮窗再截，存到App并同步 ----------
+    private fun shoot() {
+        if (!CaptureService.ready) { Toast.makeText(this, "请先在App「热门」页开启截屏权限", Toast.LENGTH_LONG).show(); return }
+        closePanel()
+        val hide = listOfNotNull<View>(bubble, mask, noteWin)
+        hide.forEach { it.visibility = View.INVISIBLE }
+        Handler(Looper.getMainLooper()).postDelayed({
+            val bmp = CaptureService.grab()
+            hide.forEach { it.visibility = View.VISIBLE }
+            if (bmp == null) Toast.makeText(this, "截屏失败，请再试一次", Toast.LENGTH_SHORT).show()
+            else {
+                Toast.makeText(this, "已保存到「热门」", Toast.LENGTH_SHORT).show()
+                val ctx = applicationContext
+                Thread { Shots.save(ctx, bmp); GitHub.sync(ctx) }.start()
+            }
+        }, 400)
+    }
 
     // ---------- 黑色遮挡（位置大小记忆） ----------
     private fun openMask() {

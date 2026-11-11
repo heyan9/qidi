@@ -9,7 +9,7 @@ import java.net.URL
 object GitHub {
     private fun call(method: String, url: String, token: String, body: String?): Pair<Int, String> {
         val cn = URL(url).openConnection() as HttpURLConnection
-        cn.requestMethod = method; cn.connectTimeout = 15000; cn.readTimeout = 20000
+        cn.requestMethod = method; cn.connectTimeout = 15000; cn.readTimeout = 40000
         cn.setRequestProperty("Authorization", "Bearer $token")
         cn.setRequestProperty("Accept", "application/vnd.github+json")
         if (body != null) {
@@ -67,10 +67,17 @@ object GitHub {
             putAuto(tok, o, r, "LEADERBOARD.md", md.toString())
 
             val ks = Store.keywordStats(c)
-            val kw = StringBuilder("# 关键词统计\n\n（正确率 = 该关键词出现时判断为“对”的比例）\n")
-            for ((k, title) in listOf("type" to "① 内容类型", "pos" to "② 正向关键词", "neg" to "③ 反向关键词")) {
-                kw.append("\n## $title\n\n| 关键词 | 次数 | 正确率 |\n|---|---|---|\n")
-                ks[k]!!.forEach { kw.append("| ${it.w} | ${it.n} | ${it.pct}% |\n") }
+            val kw = StringBuilder("# 关键词统计\n\n（占比 = 含该词的题数 / 总题数；正确率 = 含该词的题里判“对”的比例）\n")
+            fun table(st: Store.KStats, k: String, title: String) {
+                kw.append("\n### $title\n\n| 关键词 | 次数 | 占比 | 正确率 |\n|---|---|---|---|\n")
+                st.lists[k]!!.forEach { kw.append("| ${it.w} | ${it.n} | ${st.share(it)}% | ${it.pct}% |\n") }
+            }
+            kw.append("\n## 全部（${ks.total}题，正确率${ks.pct}%）\n")
+            table(ks, "type", "内容类型"); table(ks, "pos", "正向关键词"); table(ks, "neg", "反向关键词")
+            for (t in ks.lists["type"]!!.map { it.w }) {
+                val kt = Store.keywordStats(c, t)
+                kw.append("\n## 内容类型：$t（${kt.total}题，正确率${kt.pct}%）\n")
+                table(kt, "pos", "正向关键词"); table(kt, "neg", "反向关键词")
             }
             putAuto(tok, o, r, "KEYWORDS.md", kw.toString())
 
@@ -82,6 +89,12 @@ object GitHub {
                 val lg = Store.log(c, d); val nt = Store.notes(c, d)
                 if (lg.isNotEmpty()) putAuto(tok, o, r, "logs/$d.csv", "time,choice,correct,type,positive,negative\n$lg")
                 if (nt.isNotBlank()) putAuto(tok, o, r, "notes/$d.md", "# $d 错题笔记\n\n$nt\n")
+            }
+            val up = Shots.uploaded(c)
+            for (f in Shots.files(c)) {
+                if (f.name in up) continue
+                putBin(tok, o, r, "screenshots/${Shots.dateOf(f.name)}/${f.name}", f.readBytes())
+                Shots.markUploaded(c, f.name)
             }
             "同步成功 ✓"
         } catch (e: Exception) { "同步失败：" + e.message }
@@ -136,7 +149,50 @@ object GitHub {
                     sp.edit().putString("opt_$k", (0 until a.length()).joinToString("\n") { a.getString(it) }).apply()
                 }
             }
+            val (rc, rs) = call("GET", "https://api.github.com/repos/$o/$r", tok, null)
+            if (rc == 200) {
+                val br = JSONObject(rs).getString("default_branch")
+                val (tc, ts) = call("GET", "https://api.github.com/repos/$o/$r/git/trees/$br?recursive=1", tok, null)
+                if (tc == 200) {
+                    val arr = JSONObject(ts).getJSONArray("tree")
+                    for (i in 0 until arr.length()) {
+                        val path = arr.getJSONObject(i).getString("path")
+                        if (!path.startsWith("screenshots/") || !path.endsWith(".jpg")) continue
+                        val name = path.substringAfterLast('/')
+                        val lf = java.io.File(Shots.dir(c), name)
+                        if (!lf.exists()) { val b = getBin(tok, o, r, path); if (b != null) { lf.writeBytes(b); n++ } }
+                        Shots.markUploaded(c, name)
+                    }
+                }
+            }
             n to null
         } catch (e: Exception) { 0 to "恢复失败：" + e.message }
+    }
+
+    private fun getBin(t: String, o: String, r: String, path: String): ByteArray? {
+        val (c, s) = call("GET", "https://api.github.com/repos/$o/$r/contents/$path", t, null)
+        if (c == 404) return null
+        if (c != 200) throw Exception("下载$path 失败($c)")
+        val ct = JSONObject(s).optString("content"); if (ct.isEmpty()) return null
+        return Base64.decode(ct, Base64.DEFAULT)
+    }
+    private fun putBin(t: String, o: String, r: String, path: String, bytes: ByteArray) {
+        val j = JSONObject().put("message", "screenshot").put("content", Base64.encodeToString(bytes, Base64.NO_WRAP))
+        val (c, _) = call("PUT", "https://api.github.com/repos/$o/$r/contents/$path", t, j.toString())
+        if (c !in 200..201 && c != 422) throw Exception("上传截图失败($c)")   // 422 = 云端已存在
+    }
+    /** 删除云端截图，成功返回 true */
+    fun deleteShot(c: Context, name: String): Boolean {
+        val sp = Store.sp(c)
+        val tok = sp.getString("token", "") ?: ""; val o = sp.getString("owner", "") ?: ""; val r = sp.getString("repo", "") ?: ""
+        if (tok.isBlank() || o.isBlank() || r.isBlank()) return false
+        return try {
+            val url = "https://api.github.com/repos/$o/$r/contents/screenshots/${Shots.dateOf(name)}/$name"
+            val (code, s) = call("GET", url, tok, null)
+            if (code == 404) return true
+            if (code != 200) return false
+            val (c2, _) = call("DELETE", url, tok, JSONObject().put("message", "delete screenshot").put("sha", JSONObject(s).getString("sha")).toString())
+            c2 in 200..201
+        } catch (e: Exception) { false }
     }
 }

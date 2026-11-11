@@ -70,21 +70,30 @@ object Store {
         return if (l.isEmpty()) null else l.map { score(c, it) }.average().toFloat()
     }
     data class KW(val w: String, val n: Int, val ok: Int) { val pct get() = if (n == 0) 0 else ok * 100 / n }
-    /** 返回 "type"/"pos"/"neg" 三类关键词：出现次数、其中答对次数，按次数从高到低 */
-    fun keywordStats(c: Context): Map<String, List<KW>> {
+    /** total=参与统计的题数，ok=其中答对数；lists 含 "type"/"pos"/"neg" */
+    data class KStats(val total: Int, val ok: Int, val lists: Map<String, List<KW>>) {
+        fun share(k: KW) = if (total == 0) 0 else k.n * 100 / total
+        val pct get() = if (total == 0) 0 else ok * 100 / total
+    }
+    /** type=null 统计全部；否则只统计该内容类型下的题。只统计选过类型/关键词的题 */
+    fun keywordStats(c: Context, type: String? = null): KStats {
         val m = mapOf("type" to HashMap<String, IntArray>(), "pos" to HashMap<String, IntArray>(), "neg" to HashMap<String, IntArray>())
         fun hit(k: String, w: String, ok: Boolean) { if (w.isBlank()) return; val a = m[k]!!.getOrPut(w) { IntArray(2) }; a[0]++; if (ok) a[1]++ }
+        var total = 0; var okAll = 0
         for (k in sp(c).all.keys.filter { it.startsWith("log_") }) {
             for (line in log(c, k.substring(4)).split("\n")) {
                 val p = line.split(","); if (p.size < 4) continue
+                if (p.drop(3).none { it.isNotBlank() }) continue
+                if (type != null && p[3] != type) continue
                 val ok = p[2] == "1"
+                total++; if (ok) okAll++
                 hit("type", p[3], ok)
                 var pos = ""; var neg = ""
                 if (p.size >= 6) { pos = p[4]; neg = p[5] } else if (p.size == 5) { if (ok) pos = p[4] else neg = p[4] }
                 pos.split("|").forEach { hit("pos", it, ok) }; neg.split("|").forEach { hit("neg", it, ok) }
             }
         }
-        return m.mapValues { e -> e.value.entries.sortedByDescending { it.value[0] }.map { KW(it.key, it.value[0], it.value[1]) } }
+        return KStats(total, okAll, m.mapValues { e -> e.value.entries.sortedByDescending { it.value[0] }.map { KW(it.key, it.value[0], it.value[1]) } })
     }
     /** (总题数, 已带关键词的题数) */
     fun taggedCount(c: Context): Pair<Int, Int> {
